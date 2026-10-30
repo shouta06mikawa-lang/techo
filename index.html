@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="手帳">
+<meta name="theme-color" content="#ffffff">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/icon-180.png">
+<link rel="stylesheet" href="style.css">
+<title>手帳</title>
+</head>
+<body>
+<main id="stage">
+  <div id="page">
+    <div id="template"></div>
+    <span id="version"></span>
+    <canvas id="ink"></canvas>
+    <canvas id="live"></canvas>
+  </div>
+</main>
+
+<footer id="toolbar">
+  <button class="tool active" data-tool="pen" aria-label="ペン">
+    <svg viewBox="0 0 24 24"><path d="M4 20l1.2-4.6L15.8 4.8a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8L8.6 18.8z"/><path d="M14 6.6l3.4 3.4"/></svg>
+  </button>
+  <button class="tool" data-tool="eraser" aria-label="消しゴム">
+    <svg viewBox="0 0 24 24"><path d="M8.5 19.5l-4-4a2 2 0 0 1 0-2.8l8.2-8.2a2 2 0 0 1 2.8 0l4 4a2 2 0 0 1 0 2.8l-7.2 7.2"/><path d="M8.5 19.5H20"/><path d="M9 9l6 6"/></svg>
+  </button>
+</footer>
+
+<div id="toast" hidden></div>
+
+<script src="app.js"></script>
+</body>
+</html>
