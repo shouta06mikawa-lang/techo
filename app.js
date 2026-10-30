@@ -1,7 +1,7 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.2.0';
+const APP_VERSION = '0.3.0';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
@@ -81,7 +81,33 @@ const store = (() => {
       tx.onerror = () => reject(tx.error);
     });
   }
-  return { get, put };
+  async function getAllWeeks() {
+    const db = await open();
+    return new Promise((resolve, reject) => {
+      const out = {};
+      const req = db.transaction('weeks').objectStore('weeks').openCursor();
+      req.onsuccess = () => {
+        const cur = req.result;
+        if (!cur) return resolve(out);
+        out[cur.key] = cur.value;
+        cur.continue();
+      };
+      req.onerror = () => reject(req.error);
+    });
+  }
+  async function replaceAllWeeks(all) {
+    const db = await open();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('weeks', 'readwrite');
+      const os = tx.objectStore('weeks');
+      os.clear();
+      for (const [key, value] of Object.entries(all)) os.put(value, key);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+      tx.onabort = () => reject(tx.error);
+    });
+  }
+  return { get, put, getAllWeeks, replaceAllWeeks };
 })();
 
 const weeks = new Map();   // 週キー → 線の配列（読み込み済みの週）
@@ -107,6 +133,7 @@ async function flush() {
       toast('保存に失敗しました');
     }
   }
+  updateBackupInfo();
 }
 
 document.addEventListener('visibilitychange', () => {
@@ -504,12 +531,123 @@ stage.addEventListener('wheel', (e) => {
 
 // ---------------------------------------------------------------- ツールバー
 
-for (const btn of document.querySelectorAll('.tool')) {
+const toolButtons = document.querySelectorAll('.tool[data-tool]');
+for (const btn of toolButtons) {
   btn.addEventListener('click', () => {
     state.tool = btn.dataset.tool;
-    for (const b of document.querySelectorAll('.tool')) b.classList.toggle('active', b === btn);
+    for (const b of toolButtons) b.classList.toggle('active', b === btn);
   });
 }
+
+// ---------------------------------------------------------------- バックアップと復元
+// 全部の週を1つの JSON ファイルにする。iPad では共有シートの「"ファイル"に保存」で残す。
+
+const BACKUP_REMIND_DAYS = 7;
+const menu = $('backupMenu');
+let hasInk = false;   // どこかの週に何か書いてあるか
+
+function lastBackupTime() {
+  try { return Number(localStorage.getItem('lastBackup')) || 0; } catch (err) { return 0; }
+}
+
+function updateBackupInfo() {
+  const t = lastBackupTime();
+  $('lastBackup').textContent = t
+    ? `前回のバックアップ: ${new Date(t).toLocaleDateString('ja-JP')}`
+    : 'まだバックアップしていません';
+  // 書いた内容があって、しばらくバックアップしていなければ赤い点で知らせる
+  if (!hasInk) hasInk = [...weeks.values()].some((s) => s.length);
+  $('backupBadge').hidden = !(hasInk && Date.now() - t > BACKUP_REMIND_DAYS * 864e5);
+}
+
+$('backupBtn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  menu.hidden = !menu.hidden;
+  if (!menu.hidden) updateBackupInfo();
+});
+document.addEventListener('pointerdown', (e) => {
+  if (!menu.hidden && !menu.contains(e.target) && !$('backupBtn').contains(e.target)) menu.hidden = true;
+});
+
+let preparedBackup = null;   // 共有画面を開けなかったときに、もう一度押してもらう用
+
+async function makeBackupFile() {
+  await flush();
+  const all = await store.getAllWeeks();
+  const data = { app: 'techo', format: 1, exportedAt: new Date().toISOString(), weeks: all };
+  const name = `techo-backup-${dateKey(new Date())}.json`;
+  return { file: new File([JSON.stringify(data)], name, { type: 'application/json' }), count: Object.keys(all).length };
+}
+
+$('doBackup').addEventListener('click', async () => {
+  try {
+    const { file, count } = preparedBackup || await makeBackupFile();
+    preparedBackup = null;
+    $('doBackup').textContent = 'バックアップを保存';
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      try {
+        await navigator.share({ files: [file], title: file.name });
+      } catch (err) {
+        if (err.name === 'AbortError') return;   // 共有画面を閉じただけ
+        if (err.name === 'NotAllowedError') {
+          // 準備に時間がかかると Safari が共有画面を出さないことがある。準備済みにしてもう一度押してもらう
+          preparedBackup = { file, count };
+          $('doBackup').textContent = '準備できました。もう一度押してください';
+          return;
+        }
+        throw err;
+      }
+    } else {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(file);
+      a.download = file.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    }
+    try { localStorage.setItem('lastBackup', String(Date.now())); } catch (err) { /* 記録できなくても保存はできている */ }
+    menu.hidden = true;
+    updateBackupInfo();
+    toast(`${count}週分をバックアップしました`);
+  } catch (err) {
+    toast('バックアップに失敗しました');
+  }
+});
+
+$('doRestore').addEventListener('click', () => $('restoreFile').click());
+
+$('restoreFile').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  e.target.value = '';
+  if (!file) return;
+  let data;
+  try {
+    data = JSON.parse(await file.text());
+  } catch (err) {
+    toast('このファイルは読めませんでした');
+    return;
+  }
+  if (!data || data.app !== 'techo' || typeof data.weeks !== 'object') {
+    toast('手帳のバックアップファイルではありません');
+    return;
+  }
+  const count = Object.keys(data.weeks).length;
+  const when = data.exportedAt ? new Date(data.exportedAt).toLocaleDateString('ja-JP') : '';
+  if (!confirm(`${when} のバックアップ（${count}週分）に戻します。\n今書いてある内容は、このバックアップの内容に置き換わります。よろしいですか？`)) return;
+  try {
+    endStroke();
+    clearTimeout(saveTimer);
+    dirty.clear();
+    await store.replaceAllWeeks(data.weeks);
+    weeks.clear();
+    menu.hidden = true;
+    await showWeek();
+    toast(`${count}週分を戻しました`);
+  } catch (err) {
+    toast('戻すのに失敗しました');
+  }
+});
 
 let toastTimer = null;
 function toast(msg) {
@@ -526,6 +664,10 @@ $('version').textContent = 'v' + APP_VERSION;
 window.addEventListener('resize', layout);
 layout();
 showWeek();
+store.getAllWeeks().then((all) => {
+  hasInk = Object.values(all).some((v) => v.strokes && v.strokes.length);
+  updateBackupInfo();
+}).catch(() => {});
 
 // 日付が変わったら「今日」の色を更新
 setInterval(() => {

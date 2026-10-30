@@ -30,7 +30,20 @@
   <button class="tool" data-tool="eraser" aria-label="消しゴム">
     <svg viewBox="0 0 24 24"><path d="M8.5 19.5l-4-4a2 2 0 0 1 0-2.8l8.2-8.2a2 2 0 0 1 2.8 0l4 4a2 2 0 0 1 0 2.8l-7.2 7.2"/><path d="M8.5 19.5H20"/><path d="M9 9l6 6"/></svg>
   </button>
+  <span class="sep"></span>
+  <button class="tool" id="backupBtn" aria-label="バックアップ">
+    <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7.5 7.5L12 3l4.5 4.5"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg>
+    <span class="badge" id="backupBadge" hidden></span>
+  </button>
 </footer>
+
+<div id="backupMenu" hidden>
+  <div class="menu-title">バックアップ</div>
+  <div class="menu-note" id="lastBackup"></div>
+  <button id="doBackup">バックアップを保存</button>
+  <button id="doRestore">バックアップから戻す</button>
+  <input type="file" id="restoreFile" accept=".json,application/json" hidden>
+</div>
 
 <div id="toast" hidden></div>
 

@@ -163,6 +163,58 @@ button {
   stroke-linejoin: round;
 }
 .tool.active { background: #efefef; }
+.tool { position: relative; }
+.sep {
+  width: 1px;
+  height: 30px;
+  margin: 0 4px;
+  background: #e2e2e2;
+}
+.badge {
+  position: absolute;
+  top: 9px;
+  right: 12px;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--sun);
+}
+
+/* ---- バックアップのメニュー ---- */
+#backupMenu {
+  position: fixed;
+  left: 50%;
+  bottom: calc(env(safe-area-inset-bottom) + 90px);
+  transform: translateX(-50%);
+  width: 300px;
+  padding: 14px;
+  background: #fff;
+  border: 1px solid #ececec;
+  border-radius: 10px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.14);
+  touch-action: manipulation;
+}
+#backupMenu[hidden] { display: none; }
+.menu-title {
+  font-size: 15px;
+  font-weight: 600;
+}
+.menu-note {
+  margin: 4px 0 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+#backupMenu button {
+  display: block;
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px;
+  border-radius: 8px;
+  background: #f3f3f3;
+  font-size: 15px;
+  text-align: left;
+}
+#backupMenu button:active { background: #e6e6e6; }
 
 #toast {
   position: fixed;
