@@ -39,22 +39,27 @@ button {
 #stage {
   position: fixed;
   inset: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  overflow: hidden;
+  background: var(--paper);
+  touch-action: none;
 }
+/* ページは JS で位置と拡大率を決める（transform） */
 #page {
-  position: relative;
+  position: absolute;
+  left: 0;
+  top: 0;
   background: var(--paper);
   overflow: hidden;
   container-type: size;
-  touch-action: none;
+  transform-origin: 0 0;
 }
-#page canvas {
+#stage canvas {
   position: absolute;
   inset: 0;
   width: 100%;
   height: 100%;
+  transform-origin: 0 0;
+  pointer-events: none;
 }
 
 #template {

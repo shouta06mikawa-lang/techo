@@ -1,14 +1,14 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.3.0';
+const APP_VERSION = '0.4.0';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
 const MONTHS_EN = ['January', 'February', 'March', 'April', 'May', 'June', 'July',
   'August', 'September', 'October', 'November', 'December'];
 const ERASER_R = 9;          // 消しゴムの半径（論理座標）
-const PALM_GUARD_MS = 800;   // ペンを使った直後は指のスワイプを無視する
+const PALM_GUARD_MS = 800;   // ペンを使った直後に触れた指は無視する（手のひら対策）
 
 const $ = (id) => document.getElementById(id);
 const stage = $('stage');
@@ -27,8 +27,6 @@ const state = {
   strokes: null,   // 表示中の週の線。読み込み中は null
 };
 
-let scale = 1;     // 1論理単位あたりのCSSピクセル
-let pageRect = null;
 let lastPenTime = 0;
 
 // ---------------------------------------------------------------- 日付
@@ -190,87 +188,162 @@ function goWeek(delta) {
   flush();
   state.weekStart = addDays(state.weekStart, delta * 7);
   showWeek();
-  page.animate(
+  template.animate(
     [{ transform: `translateX(${delta * 36}px)`, opacity: 0.2 }, { transform: 'none', opacity: 1 }],
     { duration: 180, easing: 'ease-out' }
   );
+  inkCanvas.animate([{ opacity: 0.2 }, { opacity: 1 }], { duration: 180, easing: 'ease-out' });
 }
 
-// ---------------------------------------------------------------- 画面サイズ
+// ---------------------------------------------------------------- 画面サイズと拡大
+// 論理座標 → 画面:  画面x = view.x + 論理x * view.k  （k = 画面に合わせた倍率 s0 × 拡大率 z）
+// キャンバスは画面と同じ大きさで、拡大しても大きくしない（iPad はキャンバスの大きさに上限がある）。
+
+const MAX_ZOOM = 4;
+const view = { s0: 1, z: 1, x: 0, y: 0, k: 1 };
+let stageW = 0;
+let stageH = 0;
+let dpr = 1;
+let stageRect = null;
+let previewBase = null;   // 指で拡大している途中は、キャンバスを CSS で仮に伸ばし、離したら描き直す
+
+function clampView() {
+  view.z = Math.min(MAX_ZOOM, Math.max(1, view.z));
+  view.k = view.s0 * view.z;
+  const pw = PAGE_W * view.k;
+  const ph = PAGE_H * view.k;
+  view.x = pw <= stageW ? (stageW - pw) / 2 : Math.min(0, Math.max(stageW - pw, view.x));
+  view.y = ph <= stageH ? (stageH - ph) / 2 : Math.min(0, Math.max(stageH - ph, view.y));
+}
+
+// 画面上の点 from にあったページの場所が、拡大率 z のとき点 to に来るようにする
+function zoomAround(from, to, z, base) {
+  const lx = (from.x - base.x) / base.k;
+  const ly = (from.y - base.y) / base.k;
+  view.z = Math.min(MAX_ZOOM, Math.max(1, z));
+  view.k = view.s0 * view.z;
+  view.x = to.x - lx * view.k;
+  view.y = to.y - ly * view.k;
+  clampView();
+}
 
 function layout() {
   const r = stage.getBoundingClientRect();
-  const pad = 0;
-  scale = Math.max(0.1, Math.min((r.width - pad * 2) / PAGE_W, (r.height - pad * 2) / PAGE_H));
-  const w = PAGE_W * scale;
-  const h = PAGE_H * scale;
-  page.style.width = w + 'px';
-  page.style.height = h + 'px';
-  const dpr = window.devicePixelRatio || 1;
-  const k = scale * dpr;
-  for (const [c, ctx] of [[inkCanvas, ink], [liveCanvas, live]]) {
-    c.width = Math.round(w * dpr);
-    c.height = Math.round(h * dpr);
-    ctx.setTransform(k, 0, 0, k, 0, 0);
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-  }
+  stageW = r.width;
+  stageH = r.height;
+  dpr = window.devicePixelRatio || 1;
+  const ratio = 1 / view.s0;
+  view.s0 = Math.max(0.1, Math.min(stageW / PAGE_W, stageH / PAGE_H));
+  view.x *= view.s0 * ratio;
+  view.y *= view.s0 * ratio;
+  page.style.width = PAGE_W * view.s0 + 'px';
+  page.style.height = PAGE_H * view.s0 + 'px';
+  clampView();
+  commitView();
+}
+
+function setupCtx(c, ctx) {
+  c.width = Math.round(stageW * dpr);   // 大きさを設定し直すと、中身と設定がリセットされる
+  c.height = Math.round(stageH * dpr);
+  const k = view.k * dpr;
+  ctx.setTransform(k, 0, 0, k, view.x * dpr, view.y * dpr);
+  ctx.beginPath();
+  ctx.rect(0, 0, PAGE_W, PAGE_H);
+  ctx.clip();
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+}
+
+function commitView() {
+  previewBase = null;
+  page.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.z})`;
+  inkCanvas.style.transform = '';
+  setupCtx(inkCanvas, ink);
+  setupCtx(liveCanvas, live);
+  liveDirty = false;
   redrawAll();
 }
 
+function previewView() {
+  if (!previewBase) previewBase = { ...view };
+  page.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.z})`;
+  const r = view.k / previewBase.k;
+  inkCanvas.style.transform =
+    `translate(${view.x - previewBase.x * r}px, ${view.y - previewBase.y * r}px) scale(${r})`;
+}
+
 function clearCtx(ctx) {
-  ctx.clearRect(0, 0, PAGE_W, PAGE_H);
+  ctx.save();
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
+  ctx.restore();
 }
 
 // ---------------------------------------------------------------- 線の描画
-// 線は [x, y, 筆圧, x, y, 筆圧, ...] で持つ。点と点の中点をつなぐ2次曲線で滑らかにする。
+// 線は [x, y, 筆圧, x, y, 筆圧, ...] で持つ。
+// 点と点の間は、前後の点も使った滑らかな3次曲線（Catmull-Rom）で、必ず点の上を通るように描く。
+// ペンの点がまばらでも（速く書いても）カクカクしない。
 
 function widthAt(s, p) {
   return s.size * (0.35 + 1.3 * p);
 }
 
-// 点 i が追加された時点で確定する区間を描く
-function drawStep(ctx, s, i) {
+// 点 i-1 から点 i までの区間を描く。太さは区間の中で筆圧に合わせて少しずつ変える。
+function drawSeg(ctx, s, i) {
   const P = s.pts;
-  const x1 = P[i * 3 - 3], y1 = P[i * 3 - 2], p1 = P[i * 3 - 1];
-  const x2 = P[i * 3], y2 = P[i * 3 + 1], p2 = P[i * 3 + 2];
-  ctx.lineWidth = widthAt(s, (p1 + p2) / 2);
+  const n = P.length / 3;
+  const a = Math.max(i - 2, 0) * 3, b = (i - 1) * 3, c = i * 3, d = Math.min(i + 1, n - 1) * 3;
+  const x0 = P[a], y0 = P[a + 1];
+  const x1 = P[b], y1 = P[b + 1], p1 = P[b + 2];
+  const x2 = P[c], y2 = P[c + 1], p2 = P[c + 2];
+  const x3 = P[d], y3 = P[d + 1];
+  const d12 = Math.hypot(x2 - x1, y2 - y1);
+  if (!d12) return;
+  // 隣の区間との長さの比で向きを決めると、点の間隔がばらばらでも曲線がはみ出さない
+  const t1 = d12 / (Math.hypot(x1 - x0, y1 - y0) + d12) / 3;
+  const t2 = d12 / (d12 + Math.hypot(x3 - x2, y3 - y2)) / 3;
+  const c1x = x1 + (x2 - x0) * t1, c1y = y1 + (y2 - y0) * t1;
+  const c2x = x2 - (x3 - x1) * t2, c2y = y2 - (y3 - y1) * t2;
+
+  const steps = Math.min(32, Math.max(1, Math.ceil(d12 * view.k / 1.5)));
+  const q = 4 * view.k;   // 太さを 0.25 画面ピクセル単位にそろえ、同じ太さの部分は1本にまとめて描く
+  let w = 0;
+  let px = x1, py = y1;
   ctx.beginPath();
-  if (i === 1) {
-    ctx.moveTo(x1, y1);
-  } else {
-    ctx.moveTo((P[i * 3 - 6] + x1) / 2, (P[i * 3 - 5] + y1) / 2);
+  ctx.moveTo(x1, y1);
+  for (let j = 1; j <= steps; j++) {
+    const t = j / steps, u = 1 - t;
+    const B0 = u * u * u, B1 = 3 * u * u * t, B2 = 3 * u * t * t, B3 = t * t * t;
+    const x = B0 * x1 + B1 * c1x + B2 * c2x + B3 * x2;
+    const y = B0 * y1 + B1 * c1y + B2 * c2y + B3 * y2;
+    const wj = Math.max(1, Math.round(widthAt(s, p1 + (p2 - p1) * (t - 0.5 / steps)) * q)) / q;
+    if (w && wj !== w) {
+      ctx.lineWidth = w;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+    }
+    w = wj;
+    ctx.lineTo(x, y);
+    px = x;
+    py = y;
   }
-  ctx.quadraticCurveTo(x1, y1, (x1 + x2) / 2, (y1 + y2) / 2);
+  ctx.lineWidth = w;
   ctx.stroke();
 }
 
-// 最後の中点から最後の点まで（まだ確定していない端っこ）
-function drawTail(ctx, s, extra) {
-  const P = s.pts;
-  const n = P.length / 3;
-  const lx = P[n * 3 - 3], ly = P[n * 3 - 2], lp = P[n * 3 - 1];
-  if (n === 1 && !(extra && extra.length)) {
-    ctx.beginPath();
-    ctx.arc(lx, ly, widthAt(s, lp) / 2, 0, Math.PI * 2);
-    ctx.fill();
-    return;
-  }
-  ctx.lineWidth = widthAt(s, lp);
+function drawDot(ctx, s) {
   ctx.beginPath();
-  if (n === 1) ctx.moveTo(lx, ly);
-  else ctx.moveTo((P[n * 3 - 6] + lx) / 2, (P[n * 3 - 5] + ly) / 2);
-  ctx.lineTo(lx, ly);
-  if (extra) for (const [x, y] of extra) ctx.lineTo(x, y);
-  ctx.stroke();
+  ctx.arc(s.pts[0], s.pts[1], widthAt(s, s.pts[2]) / 2, 0, Math.PI * 2);
+  ctx.fill();
 }
 
 function drawStroke(ctx, s) {
   ctx.strokeStyle = s.color;
   ctx.fillStyle = s.color;
   const n = s.pts.length / 3;
-  for (let i = 1; i < n; i++) drawStep(ctx, s, i);
-  drawTail(ctx, s);
+  if (n === 1) return drawDot(ctx, s);
+  for (let i = 1; i < n; i++) drawSeg(ctx, s, i);
 }
 
 function redrawAll() {
@@ -278,35 +351,36 @@ function redrawAll() {
   if (state.strokes) for (const s of state.strokes) drawStroke(ink, s);
 }
 
-// ---------------------------------------------------------------- 入力
+// ---------------------------------------------------------------- ペンの入力
 
 function toPage(e) {
-  return [(e.clientX - pageRect.left) / scale, (e.clientY - pageRect.top) / scale];
+  return [(e.clientX - stageRect.left - view.x) / view.k, (e.clientY - stageRect.top - view.y) / view.k];
 }
 
 let current = null;   // 書いている途中の線
 let erasing = null;   // 消しゴム中の情報
-let swipe = null;     // 指スワイプ中の情報
 
 function isDrawingPointer(e) {
   // iPad では Apple Pencil = 'pen'、指や手のひら = 'touch'。Mac での確認用にマウスも書ける。
   return e.pointerType === 'pen' || e.pointerType === 'mouse';
 }
 
-page.addEventListener('pointerdown', (e) => {
+stage.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'touch') {
-    startSwipe(e);
+    touchDown(e);
     return;
   }
   if (!isDrawingPointer(e) || e.button !== 0 || !state.strokes) return;
   e.preventDefault();
   lastPenTime = Date.now();
-  if (swipe) swipe.cancelled = true;
-  for (const a of page.getAnimations()) a.finish();
-  pageRect = page.getBoundingClientRect();
-  try { page.setPointerCapture(e.pointerId); } catch (err) { /* 取れなくても描ける */ }
-
+  cancelGesture();   // 先に置いていた手のひらでページが動いていたら元に戻す
+  if (previewBase) commitView();
+  for (const a of template.getAnimations()) a.finish();
+  stageRect = stage.getBoundingClientRect();
   const [x, y] = toPage(e);
+  if (x < 0 || y < 0 || x > PAGE_W || y > PAGE_H) return;   // ページの外
+  try { stage.setPointerCapture(e.pointerId); } catch (err) { /* 取れなくても描ける */ }
+
   if (state.tool === 'eraser') {
     erasing = { id: e.pointerId, x, y };
     eraseAlong(x, y, x, y);
@@ -322,9 +396,9 @@ page.addEventListener('pointerdown', (e) => {
   }
 });
 
-page.addEventListener('pointermove', (e) => {
+stage.addEventListener('pointermove', (e) => {
   if (e.pointerType === 'touch') {
-    moveSwipe(e);
+    touchMove(e);
     return;
   }
   if (current && e.pointerId === current.id) {
@@ -344,13 +418,13 @@ page.addEventListener('pointermove', (e) => {
 
 const finishPointer = (e) => {
   if (e.pointerType === 'touch') {
-    endSwipe(e);
+    touchUp(e);
     return;
   }
   if ((current && e.pointerId === current.id) || (erasing && e.pointerId === erasing.id)) endStroke();
 };
-page.addEventListener('pointerup', finishPointer);
-page.addEventListener('pointercancel', finishPointer);
+stage.addEventListener('pointerup', finishPointer);
+stage.addEventListener('pointercancel', finishPointer);
 
 function round1(v) {
   return Math.round(v * 10) / 10;
@@ -374,31 +448,43 @@ function addPoint(e) {
   const p = pressureOf(e, current.lastP);
   current.lastP = p;
   s.pts.push(round1(x), round1(y), p);
-  ink.strokeStyle = s.color;
-  drawStep(ink, s, n);
+  // 1つ前の区間は、次の点が来て形が決まったので本番のキャンバスに描く
+  if (n >= 2) {
+    ink.strokeStyle = s.color;
+    drawSeg(ink, s, n - 1);
+  }
 }
 
-// 確定前の端っこと、ブラウザが予測した先の点を上のキャンバスに描いて遅れを小さく見せる
+// まだ形が決まらない最後の区間と、ブラウザが予測した先の点を上のキャンバスに描いて遅れを小さく見せる
 let liveDirty = false;
 function drawLive(e) {
   clearCtx(live);
   const s = current.stroke;
+  const n = s.pts.length / 3;
+  live.strokeStyle = s.color;
+  live.fillStyle = s.color;
+  if (n === 1) drawDot(live, s);
+  else drawSeg(live, s, n - 1);
   let predicted = [];
   if (e.getPredictedEvents) {
     try { predicted = e.getPredictedEvents().map(toPage); } catch (err) { predicted = []; }
   }
-  live.strokeStyle = s.color;
-  live.fillStyle = s.color;
-  drawTail(live, s, predicted);
+  if (predicted.length) {
+    live.lineWidth = widthAt(s, s.pts[n * 3 - 1]);
+    live.beginPath();
+    live.moveTo(s.pts[n * 3 - 3], s.pts[n * 3 - 2]);
+    for (const [x, y] of predicted) live.lineTo(x, y);
+    live.stroke();
+  }
   liveDirty = true;
 }
 
 function drawEraserCursor(x, y) {
   clearCtx(live);
-  live.lineWidth = 1 / scale;
+  live.lineWidth = 1 / view.k;
   live.strokeStyle = 'rgba(0,0,0,0.35)';
   live.beginPath();
-  live.arc(x, y, ERASER_R, 0, Math.PI * 2);
+  live.arc(x, y, ERASER_R / view.z, 0, Math.PI * 2);
   live.stroke();
   liveDirty = true;
 }
@@ -406,9 +492,11 @@ function drawEraserCursor(x, y) {
 function endStroke() {
   if (current) {
     const s = current.stroke;
+    const n = s.pts.length / 3;
     ink.strokeStyle = s.color;
     ink.fillStyle = s.color;
-    drawTail(ink, s);
+    if (n === 1) drawDot(ink, s);
+    else drawSeg(ink, s, n - 1);
     state.strokes.push(s);
     current = null;
     markDirty();
@@ -447,9 +535,9 @@ function distToSeg(px, py, ax, ay, bx, by) {
   return Math.sqrt(dx * dx + dy * dy);
 }
 
-function hits(s, x, y) {
+function hits(s, x, y, er) {
   const b = bboxOf(s);
-  const r = ERASER_R + s.size * 1.7;
+  const r = er + s.size * 1.7;
   if (x < b[0] - r || x > b[2] + r || y < b[1] - r || y > b[3] + r) return false;
   const P = s.pts;
   if (P.length === 3) return Math.hypot(P[0] - x, P[1] - y) <= r;
@@ -461,13 +549,14 @@ function hits(s, x, y) {
 
 function eraseAlong(x0, y0, x1, y1) {
   const strokes = state.strokes;
-  const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / (ERASER_R / 2)));
+  const er = ERASER_R / view.z;   // 拡大しても、画面上の消しゴムの大きさは同じ
+  const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / (er / 2)));
   let removed = false;
   for (let k = 0; k <= steps; k++) {
     const x = x0 + (x1 - x0) * (k / steps);
     const y = y0 + (y1 - y0) * (k / steps);
     for (let i = strokes.length - 1; i >= 0; i--) {
-      if (hits(strokes[i], x, y)) {
+      if (hits(strokes[i], x, y, er)) {
         strokes.splice(i, 1);
         removed = true;
       }
@@ -479,47 +568,147 @@ function eraseAlong(x0, y0, x1, y1) {
   }
 }
 
-// ---------------------------------------------------------------- 指スワイプで週を移動
+// ---------------------------------------------------------------- 指の操作
+// 1本指: 横にはらうと週を移動（拡大中はページを動かす）／ダブルタップで拡大・元の大きさ
+// 2本指: 広げる・つまむで拡大・縮小
+// ペンを使っている最中・直後に触れた指は手のひらとみなして無視する。
 
-function startSwipe(e) {
-  if (swipe) {
-    swipe.cancelled = true;   // 2本目の指や手のひらが触れたらスワイプしない
+const touches = new Map();   // 指の id → 画面上の位置
+let gesture = null;          // { type: 'one' | 'pinch' | 'blocked', ... }
+let lastTap = null;
+
+function stagePoint(e) {
+  const r = stage.getBoundingClientRect();
+  return { x: e.clientX - r.left, y: e.clientY - r.top };
+}
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+const mid = (a, b) => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
+
+function cancelGesture() {
+  if (gesture && gesture.revert && previewBase) {
+    Object.assign(view, gesture.revert);
+    commitView();
+  }
+  gesture = touches.size ? { type: 'blocked' } : null;
+}
+
+function touchDown(e) {
+  touches.set(e.pointerId, stagePoint(e));
+  try { stage.setPointerCapture(e.pointerId); } catch (err) { /* なくても動く */ }
+  if (current || erasing || Date.now() - lastPenTime < PALM_GUARD_MS) {
+    cancelGesture();
     return;
   }
-  swipe = { id: e.pointerId, x: e.clientX, y: e.clientY, t: Date.now(),
-    cancelled: Date.now() - lastPenTime < PALM_GUARD_MS };
-}
-function moveSwipe(e) {
-  if (swipe && e.pointerId === swipe.id && (current || erasing)) swipe.cancelled = true;
-}
-function endSwipe(e) {
-  if (!swipe || e.pointerId !== swipe.id) return;
-  const s = swipe;
-  swipe = null;
-  if (s.cancelled || e.type === 'pointercancel') return;
-  if (lastPenTime > s.t - 300) return;   // スワイプ中にペンが使われた＝手のひら
-  const dx = e.clientX - s.x;
-  const dy = e.clientY - s.y;
-  if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && Date.now() - s.t < 900) {
-    goWeek(dx < 0 ? 1 : -1);
+  if (gesture && gesture.type === 'blocked') return;
+  const revert = (gesture && gesture.revert) || { ...(previewBase || view) };
+  if (touches.size === 1) {
+    gesture = { type: 'one', id: e.pointerId, start: touches.get(e.pointerId), t: Date.now(),
+      base: { ...view }, moved: false, revert };
+  } else if (touches.size === 2) {
+    const [a, b] = [...touches.values()];
+    gesture = { type: 'pinch', d0: Math.max(10, dist(a, b)), m0: mid(a, b), base: { ...view }, revert };
+  } else {
+    cancelGesture();
   }
 }
 
-// iPad Safari の長押しメニュー・拡大鏡・ダブルタップ拡大・ピンチを止める
-page.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
-page.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
-document.addEventListener('gesturestart', (e) => e.preventDefault());
+function touchMove(e) {
+  if (!touches.has(e.pointerId)) return;
+  touches.set(e.pointerId, stagePoint(e));
+  if (!gesture) return;
+  if (gesture.type === 'one' && e.pointerId === gesture.id) {
+    const p = touches.get(e.pointerId);
+    const dx = p.x - gesture.start.x;
+    const dy = p.y - gesture.start.y;
+    if (Math.hypot(dx, dy) > 10) gesture.moved = true;
+    if (gesture.base.z > 1.01) {   // 拡大中は1本指でページを動かす
+      view.x = gesture.base.x + dx;
+      view.y = gesture.base.y + dy;
+      clampView();
+      previewView();
+    }
+  } else if (gesture.type === 'pinch' && touches.size >= 2) {
+    const [a, b] = [...touches.values()];
+    zoomAround(gesture.m0, mid(a, b), gesture.base.z * dist(a, b) / gesture.d0, gesture.base);
+    previewView();
+  }
+}
+
+function touchUp(e) {
+  if (!touches.has(e.pointerId)) return;
+  touches.delete(e.pointerId);
+  const g = gesture;
+  if (g && g.type === 'one' && e.pointerId === g.id && e.type === 'pointerup' && lastPenTime < g.t - 300) {
+    const p = stagePoint(e);
+    const dx = p.x - g.start.x;
+    const dy = p.y - g.start.y;
+    const dt = Date.now() - g.t;
+    if (g.base.z <= 1.01 && Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < 900) {
+      goWeek(dx < 0 ? 1 : -1);
+    } else if (!g.moved && dt < 300) {
+      handleTap(p);
+    }
+  }
+  if (g && g.type === 'pinch') gesture = { type: 'blocked' };   // 残った指では何もしない
+  if (touches.size === 0) {
+    gesture = null;
+    if (previewBase) commitView();
+  }
+}
+
+function handleTap(p) {
+  const now = Date.now();
+  if (lastTap && now - lastTap.t < 350 && dist(p, lastTap) < 40) {
+    lastTap = null;
+    if (view.z > 1.01) {
+      view.z = 1;
+      clampView();
+    } else {
+      zoomAround(p, p, 2.5, { ...view });
+    }
+    commitView();
+  } else {
+    lastTap = { t: now, x: p.x, y: p.y };
+  }
+}
+
+// iPad Safari の長押しメニュー・拡大鏡・ダブルタップ拡大・画面全体のピンチを止める
+stage.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+stage.addEventListener('touchmove', (e) => e.preventDefault(), { passive: false });
 document.addEventListener('contextmenu', (e) => e.preventDefault());
 
-// Mac で確認しやすいように：矢印キーとトラックパッドの横スクロールでも週を移動
+// Mac で確認しやすいように：
+// 矢印キー・トラックパッドの横スクロールで週を移動、ピンチ（または control + スクロール）で拡大、拡大中はスクロールで移動
 document.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowLeft') goWeek(-1);
   if (e.key === 'ArrowRight') goWeek(1);
 });
+
 let wheelAcc = 0;
 let wheelLock = 0;
+let commitTimer = null;
+function commitSoon() {
+  clearTimeout(commitTimer);
+  commitTimer = setTimeout(() => { if (previewBase) commitView(); }, 150);
+}
 stage.addEventListener('wheel', (e) => {
   e.preventDefault();
+  if (current || erasing) return;
+  if (e.ctrlKey) {
+    const p = stagePoint(e);
+    zoomAround(p, p, view.z * Math.exp(-e.deltaY / 100), { ...view });
+    previewView();
+    commitSoon();
+    return;
+  }
+  if (view.z > 1.01) {
+    view.x -= e.deltaX;
+    view.y -= e.deltaY;
+    clampView();
+    previewView();
+    commitSoon();
+    return;
+  }
   if (Date.now() < wheelLock) return;
   wheelAcc += e.deltaX;
   if (Math.abs(wheelAcc) > 80) {
@@ -528,6 +717,25 @@ stage.addEventListener('wheel', (e) => {
     wheelLock = Date.now() + 500;
   }
 }, { passive: false });
+
+// Mac の Safari はトラックパッドのピンチを gesture イベントで送ってくる（iPad の指は上の処理で扱う）
+let macPinch = null;
+document.addEventListener('gesturestart', (e) => {
+  e.preventDefault();
+  macPinch = touches.size === 0 && !current && !erasing ? { ...view } : null;
+});
+document.addEventListener('gesturechange', (e) => {
+  e.preventDefault();
+  if (!macPinch) return;
+  const p = stagePoint(e);
+  zoomAround(p, p, macPinch.z * e.scale, macPinch);
+  previewView();
+});
+document.addEventListener('gestureend', (e) => {
+  e.preventDefault();
+  if (macPinch && previewBase) commitView();
+  macPinch = null;
+});
 
 // ---------------------------------------------------------------- ツールバー
 
