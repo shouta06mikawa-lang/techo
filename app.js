@@ -1,7 +1,7 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.5.0';
+const APP_VERSION = '0.6.0';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
@@ -181,6 +181,7 @@ async function showWeek() {
   }
   state.strokes = strokes;
   redrawAll();
+  updateUndoButtons();
 }
 
 function goWeek(delta) {
@@ -382,7 +383,7 @@ stage.addEventListener('pointerdown', (e) => {
   try { stage.setPointerCapture(e.pointerId); } catch (err) { /* 取れなくても描ける */ }
 
   if (state.tool === 'eraser') {
-    erasing = { id: e.pointerId, x, y };
+    erasing = { id: e.pointerId, x, y, items: [] };
     eraseAlong(x, y, x, y);
     drawEraserCursor(x, y);
   } else {
@@ -500,12 +501,79 @@ function endStroke() {
     state.strokes.push(s);
     current = null;
     markDirty();
+    record({ type: 'add', stroke: s });
   }
+  if (erasing && erasing.items.length) record({ type: 'erase', items: erasing.items });
   erasing = null;
   if (liveDirty) {
     clearCtx(live);
     liveDirty = false;
   }
+}
+
+// ---------------------------------------------------------------- 元に戻す／やり直し
+// 週ごとに「したこと」を覚えておく（アプリを開いている間だけ。閉じると消える）。
+// 書いた線は { type: 'add', stroke }、消しゴムはペンを離すまでに消した線をまとめて { type: 'erase', items }。
+
+const HISTORY_MAX = 200;
+const histories = new Map();   // 週キー → { undo: [], redo: [] }
+
+function history() {
+  const key = currentKey();
+  let h = histories.get(key);
+  if (!h) {
+    h = { undo: [], redo: [] };
+    histories.set(key, h);
+  }
+  return h;
+}
+
+function record(action) {
+  const h = history();
+  h.undo.push(action);
+  if (h.undo.length > HISTORY_MAX) h.undo.shift();
+  h.redo.length = 0;
+  updateUndoButtons();
+}
+
+function applyAction(a, reverse) {
+  const S = state.strokes;
+  if (a.type === 'add') {
+    if (reverse) {
+      const i = S.indexOf(a.stroke);
+      if (i >= 0) S.splice(i, 1);
+    } else {
+      S.push(a.stroke);
+    }
+  } else if (reverse) {
+    // 消した順の逆に、元の場所へ戻す（重なり順もそのまま）
+    for (let j = a.items.length - 1; j >= 0; j--) {
+      S.splice(Math.min(a.items[j].index, S.length), 0, a.items[j].stroke);
+    }
+  } else {
+    for (const it of a.items) {
+      const i = S.indexOf(it.stroke);
+      if (i >= 0) S.splice(i, 1);
+    }
+  }
+}
+
+function undoRedo(isUndo) {
+  if (current || erasing || !state.strokes) return;
+  const h = history();
+  const a = (isUndo ? h.undo : h.redo).pop();
+  if (!a) return;
+  applyAction(a, isUndo);
+  (isUndo ? h.redo : h.undo).push(a);
+  redrawAll();
+  markDirty();
+  updateUndoButtons();
+}
+
+function updateUndoButtons() {
+  const h = histories.get(currentKey());
+  $('undoBtn').disabled = !(h && h.undo.length);
+  $('redoBtn').disabled = !(h && h.redo.length);
 }
 
 // ---------------------------------------------------------------- 消しゴム（触れた線をまるごと消す）
@@ -557,6 +625,7 @@ function eraseAlong(x0, y0, x1, y1) {
     const y = y0 + (y1 - y0) * (k / steps);
     for (let i = strokes.length - 1; i >= 0; i--) {
       if (hits(strokes[i], x, y, er)) {
+        if (erasing) erasing.items.push({ stroke: strokes[i], index: i });
         strokes.splice(i, 1);
         removed = true;
       }
@@ -682,6 +751,10 @@ document.addEventListener('contextmenu', (e) => e.preventDefault());
 document.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowLeft') goWeek(-1);
   if (e.key === 'ArrowRight') goWeek(1);
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+    e.preventDefault();
+    undoRedo(!e.shiftKey);   // Mac: ⌘Z で元に戻す、⌘⇧Z でやり直し
+  }
 });
 
 let wheelAcc = 0;
@@ -738,6 +811,9 @@ document.addEventListener('gestureend', (e) => {
 });
 
 // ---------------------------------------------------------------- ツールバー
+
+$('undoBtn').addEventListener('click', () => undoRedo(true));
+$('redoBtn').addEventListener('click', () => undoRedo(false));
 
 const toolButtons = document.querySelectorAll('.tool[data-tool]');
 for (const btn of toolButtons) {
@@ -905,6 +981,7 @@ $('restoreFile').addEventListener('change', async (e) => {
     dirty.clear();
     await store.replaceAllWeeks(data.weeks);
     weeks.clear();
+    histories.clear();
     menu.hidden = true;
     await showWeek();
     toast(`${count}週分を戻しました`);

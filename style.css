@@ -168,6 +168,7 @@ button {
   stroke-linejoin: round;
 }
 .tool.active { background: #efefef; }
+.tool:disabled { opacity: 0.28; cursor: default; }
 .tool { position: relative; }
 .sep {
   width: 1px;
