@@ -1,7 +1,7 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.4.0';
+const APP_VERSION = '0.5.0';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
@@ -742,10 +742,71 @@ document.addEventListener('gestureend', (e) => {
 const toolButtons = document.querySelectorAll('.tool[data-tool]');
 for (const btn of toolButtons) {
   btn.addEventListener('click', () => {
+    // 選んでいるペンをもう一度押すと、色と太さの画面を開く（Planner と同じ）
+    if (btn.dataset.tool === 'pen' && state.tool === 'pen') {
+      togglePopup($('penMenu'));
+      return;
+    }
     state.tool = btn.dataset.tool;
     for (const b of toolButtons) b.classList.toggle('active', b === btn);
+    closePopups();
   });
 }
+
+// ツールバーの上に出る小さな画面。外側を触ると閉じる（ペンで書き始めたときも閉じる）
+const popups = document.querySelectorAll('.popup');
+function closePopups(except) {
+  for (const p of popups) if (p !== except) p.hidden = true;
+}
+function togglePopup(p) {
+  closePopups(p);
+  p.hidden = !p.hidden;
+  return !p.hidden;
+}
+document.addEventListener('pointerdown', (e) => {
+  if (!e.target.closest('.popup, #toolbar')) closePopups();
+});
+
+// ---------------------------------------------------------------- ペンの色と太さ
+
+const PEN_COLORS = [
+  ['#1f2328', '黒'], ['#7a7f87', 'グレー'], ['#d64545', '赤'], ['#2f6fd6', '青'],
+  ['#2e9e5b', '緑'], ['#e8862a', 'オレンジ'], ['#8e5bd6', '紫'], ['#d65a9c', 'ピンク'],
+];
+const PEN_SIZES = [[1.4, '細'], [2.4, 'ふつう'], [3.6, '太'], [5.2, '極太']];
+
+function loadPen() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('pen') || 'null');
+    if (saved && PEN_COLORS.some(([c]) => c === saved.color)) state.color = saved.color;
+    if (saved && PEN_SIZES.some(([w]) => w === saved.size)) state.size = saved.size;
+  } catch (err) { /* 初期の黒・ふつうのまま */ }
+}
+
+function savePen() {
+  try { localStorage.setItem('pen', JSON.stringify({ color: state.color, size: state.size })); } catch (err) { /* 覚えられなくても書ける */ }
+}
+
+function renderPenMenu() {
+  $('penColor').style.background = state.color;
+  $('swatches').innerHTML = PEN_COLORS.map(([c, name]) =>
+    `<button class="swatch${c === state.color ? ' on' : ''}" data-color="${c}" style="background:${c}" aria-label="${name}"></button>`).join('');
+  $('sizes').innerHTML = PEN_SIZES.map(([w, name]) =>
+    `<button class="size${w === state.size ? ' on' : ''}" data-size="${w}">` +
+    `<span class="line" style="height:${Math.max(1.5, w * 1.2)}px;background:${state.color}"></span>${name}</button>`).join('');
+}
+
+$('penMenu').addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.color) state.color = b.dataset.color;
+  if (b.dataset.size) state.size = Number(b.dataset.size);
+  savePen();
+  renderPenMenu();
+});
+
+loadPen();
+renderPenMenu();
 
 // ---------------------------------------------------------------- バックアップと復元
 // 全部の週を1つの JSON ファイルにする。iPad では共有シートの「"ファイル"に保存」で残す。
@@ -768,13 +829,8 @@ function updateBackupInfo() {
   $('backupBadge').hidden = !(hasInk && Date.now() - t > BACKUP_REMIND_DAYS * 864e5);
 }
 
-$('backupBtn').addEventListener('click', (e) => {
-  e.stopPropagation();
-  menu.hidden = !menu.hidden;
-  if (!menu.hidden) updateBackupInfo();
-});
-document.addEventListener('pointerdown', (e) => {
-  if (!menu.hidden && !menu.contains(e.target) && !$('backupBtn').contains(e.target)) menu.hidden = true;
+$('backupBtn').addEventListener('click', () => {
+  if (togglePopup(menu)) updateBackupInfo();
 });
 
 let preparedBackup = null;   // 共有画面を開けなかったときに、もう一度押してもらう用
