@@ -1,7 +1,7 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.8.0';
+const APP_VERSION = '0.9.0';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
@@ -22,8 +22,8 @@ const live = liveCanvas.getContext('2d', { desynchronized: true });
 const state = {
   weekStart: mondayOf(new Date()),
   tool: 'pen',
-  color: '#1f2328',
-  size: 2.4,
+  pen: { color: '#1f2328', size: 2.4 },
+  marker: { color: '#ffd60a', size: 14 },
   strokes: null,   // 表示中の週の線。読み込み中は null
 };
 
@@ -356,22 +356,29 @@ function widthAt(s, p) {
   return s.size * (0.35 + 1.3 * p);
 }
 
-// 点 i-1 から点 i までの区間を描く。太さは区間の中で筆圧に合わせて少しずつ変える。
-function drawSeg(ctx, s, i) {
-  const P = s.pts;
+// 点 i-1 から点 i までの曲線の制御点。区間の長さが0なら null。
+function segCurve(P, i) {
   const n = P.length / 3;
   const a = Math.max(i - 2, 0) * 3, b = (i - 1) * 3, c = i * 3, d = Math.min(i + 1, n - 1) * 3;
   const x0 = P[a], y0 = P[a + 1];
-  const x1 = P[b], y1 = P[b + 1], p1 = P[b + 2];
-  const x2 = P[c], y2 = P[c + 1], p2 = P[c + 2];
+  const x1 = P[b], y1 = P[b + 1];
+  const x2 = P[c], y2 = P[c + 1];
   const x3 = P[d], y3 = P[d + 1];
   const d12 = Math.hypot(x2 - x1, y2 - y1);
-  if (!d12) return;
+  if (!d12) return null;
   // 隣の区間との長さの比で向きを決めると、点の間隔がばらばらでも曲線がはみ出さない
   const t1 = d12 / (Math.hypot(x1 - x0, y1 - y0) + d12) / 3;
   const t2 = d12 / (d12 + Math.hypot(x3 - x2, y3 - y2)) / 3;
-  const c1x = x1 + (x2 - x0) * t1, c1y = y1 + (y2 - y0) * t1;
-  const c2x = x2 - (x3 - x1) * t2, c2y = y2 - (y3 - y1) * t2;
+  return [x1, y1, x1 + (x2 - x0) * t1, y1 + (y2 - y0) * t1, x2 - (x3 - x1) * t2, y2 - (y3 - y1) * t2, x2, y2, d12];
+}
+
+// 点 i-1 から点 i までの区間を描く。太さは区間の中で筆圧に合わせて少しずつ変える。
+function drawSeg(ctx, s, i) {
+  const P = s.pts;
+  const cv = segCurve(P, i);
+  if (!cv) return;
+  const [x1, y1, c1x, c1y, c2x, c2y, x2, y2, d12] = cv;
+  const p1 = P[i * 3 - 1], p2 = P[i * 3 + 2];
 
   const steps = Math.min(32, Math.max(1, Math.ceil(d12 * view.k / 1.5)));
   const q = 4 * view.k;   // 太さを 0.25 画面ピクセル単位にそろえ、同じ太さの部分は1本にまとめて描く
@@ -406,7 +413,35 @@ function drawDot(ctx, s) {
   ctx.fill();
 }
 
+// マーカー：半透明・太さ一定。1本を1つの形として一度に塗るので、重なった部分がムラにならない。
+const MARKER_ALPHA = 0.38;
+const isMarker = (s) => s.tool === 'marker';
+
+function drawMarker(ctx, s) {
+  const P = s.pts;
+  const n = P.length / 3;
+  ctx.save();
+  ctx.globalAlpha = MARKER_ALPHA;
+  ctx.strokeStyle = s.color;
+  ctx.fillStyle = s.color;
+  ctx.beginPath();
+  if (n === 1) {
+    ctx.arc(P[0], P[1], s.size / 2, 0, Math.PI * 2);
+    ctx.fill();
+  } else {
+    ctx.moveTo(P[0], P[1]);
+    for (let i = 1; i < n; i++) {
+      const cv = segCurve(P, i);
+      if (cv) ctx.bezierCurveTo(cv[2], cv[3], cv[4], cv[5], cv[6], cv[7]);
+    }
+    ctx.lineWidth = s.size;
+    ctx.stroke();
+  }
+  ctx.restore();
+}
+
 function drawStroke(ctx, s) {
+  if (isMarker(s)) return drawMarker(ctx, s);
   ctx.strokeStyle = s.color;
   ctx.fillStyle = s.color;
   const n = s.pts.length / 3;
@@ -414,9 +449,12 @@ function drawStroke(ctx, s) {
   for (let i = 1; i < n; i++) drawSeg(ctx, s, i);
 }
 
+// マーカーを先に塗り、ペンをその上に描く（塗った上からでも文字がくっきり読める）
 function redrawAll() {
   clearCtx(ink);
-  if (state.strokes) for (const s of state.strokes) drawStroke(ink, s);
+  if (!state.strokes) return;
+  for (const s of state.strokes) if (isMarker(s)) drawStroke(ink, s);
+  for (const s of state.strokes) if (!isMarker(s)) drawStroke(ink, s);
 }
 
 // ---------------------------------------------------------------- ペンの入力
@@ -457,7 +495,9 @@ stage.addEventListener('pointerdown', (e) => {
     const p = pressureOf(e, null);
     current = {
       id: e.pointerId,
-      stroke: { color: state.color, size: state.size, pts: [round1(x), round1(y), p] },
+      stroke: state.tool === 'marker'
+        ? { tool: 'marker', color: state.marker.color, size: state.marker.size, pts: [round1(x), round1(y), p] }
+        : { color: state.pen.color, size: state.pen.size, pts: [round1(x), round1(y), p] },
       lastP: p,
     };
     drawLive(e);
@@ -516,8 +556,8 @@ function addPoint(e) {
   const p = pressureOf(e, current.lastP);
   current.lastP = p;
   s.pts.push(round1(x), round1(y), p);
-  // 1つ前の区間は、次の点が来て形が決まったので本番のキャンバスに描く
-  if (n >= 2) {
+  // 1つ前の区間は、次の点が来て形が決まったので本番のキャンバスに描く（マーカーは書き終わりにまとめて）
+  if (n >= 2 && !isMarker(s)) {
     ink.strokeStyle = s.color;
     drawSeg(ink, s, n - 1);
   }
@@ -528,6 +568,11 @@ let liveDirty = false;
 function drawLive(e) {
   clearCtx(live);
   const s = current.stroke;
+  liveDirty = true;
+  if (isMarker(s)) {
+    drawMarker(live, s);   // 書いている間は、上のキャンバスに1本まるごと描き直す
+    return;
+  }
   const n = s.pts.length / 3;
   live.strokeStyle = s.color;
   live.fillStyle = s.color;
@@ -561,11 +606,15 @@ function endStroke() {
   if (current) {
     const s = current.stroke;
     const n = s.pts.length / 3;
-    ink.strokeStyle = s.color;
-    ink.fillStyle = s.color;
-    if (n === 1) drawDot(ink, s);
-    else drawSeg(ink, s, n - 1);
     state.strokes.push(s);
+    if (isMarker(s)) {
+      redrawAll();   // ペンの文字の下に入るように描き直す
+    } else {
+      ink.strokeStyle = s.color;
+      ink.fillStyle = s.color;
+      if (n === 1) drawDot(ink, s);
+      else drawSeg(ink, s, n - 1);
+    }
     current = null;
     markDirty();
     record({ type: 'add', stroke: s });
@@ -672,7 +721,7 @@ function distToSeg(px, py, ax, ay, bx, by) {
 
 function hits(s, x, y, er) {
   const b = bboxOf(s);
-  const r = er + s.size * 1.7;
+  const r = er + (isMarker(s) ? s.size / 2 : s.size * 1.7);
   if (x < b[0] - r || x > b[2] + r || y < b[1] - r || y > b[3] + r) return false;
   const P = s.pts;
   if (P.length === 3) return Math.hypot(P[0] - x, P[1] - y) <= r;
@@ -885,8 +934,10 @@ $('redoBtn').addEventListener('click', () => undoRedo(false));
 const toolButtons = document.querySelectorAll('.tool[data-tool]');
 for (const btn of toolButtons) {
   btn.addEventListener('click', () => {
-    // 選んでいるペンをもう一度押すと、色と太さの画面を開く（Planner と同じ）
-    if (btn.dataset.tool === 'pen' && state.tool === 'pen') {
+    // 選んでいるペン・マーカーをもう一度押すと、色と太さの画面を開く（Planner と同じ）
+    if (btn.dataset.tool === state.tool && TOOL_OPTS[state.tool]) {
+      menuTool = state.tool;
+      renderPenMenu();
       togglePopup($('penMenu'));
       return;
     }
@@ -973,45 +1024,76 @@ function updateThisWeekButton() {
   $('thisWeekBtn').disabled = currentKey() === dateKey(mondayOf(new Date()));
 }
 
-// ---------------------------------------------------------------- ペンの色と太さ
+// ---------------------------------------------------------------- ペン・マーカーの色と太さ
 
-const PEN_COLORS = [
-  ['#1f2328', '黒'], ['#7a7f87', 'グレー'], ['#d64545', '赤'], ['#2f6fd6', '青'],
-  ['#2e9e5b', '緑'], ['#e8862a', 'オレンジ'], ['#8e5bd6', '紫'], ['#d65a9c', 'ピンク'],
-];
-const PEN_SIZES = [[1.4, '細'], [2.4, 'ふつう'], [3.6, '太'], [5.2, '極太']];
+const TOOL_OPTS = {
+  pen: {
+    title: 'ペン',
+    colors: [
+      ['#1f2328', '黒'], ['#7a7f87', 'グレー'], ['#d64545', '赤'], ['#2f6fd6', '青'],
+      ['#2e9e5b', '緑'], ['#e8862a', 'オレンジ'], ['#8e5bd6', '紫'], ['#d65a9c', 'ピンク'],
+    ],
+    sizes: [[1.4, '細'], [2.4, 'ふつう'], [3.6, '太'], [5.2, '極太']],
+    preview: (w) => Math.max(1.5, w * 1.2),
+    alpha: 1,
+  },
+  marker: {
+    title: 'マーカー',
+    colors: [
+      ['#ffd60a', '黄'], ['#ff5c9a', 'ピンク'], ['#33b5ff', '水色'],
+      ['#3ddc84', '緑'], ['#ff9f1a', 'オレンジ'], ['#a66bff', '紫'],
+    ],
+    sizes: [[8, '細'], [14, 'ふつう'], [22, '太']],
+    preview: (w) => w * 0.75,
+    alpha: MARKER_ALPHA + 0.15,   // 見本は少し濃いめに
+  },
+};
+let menuTool = 'pen';   // 色と太さの画面がどちらの道具用か
 
-function loadPen() {
-  try {
-    const saved = JSON.parse(localStorage.getItem('pen') || 'null');
-    if (saved && PEN_COLORS.some(([c]) => c === saved.color)) state.color = saved.color;
-    if (saved && PEN_SIZES.some(([w]) => w === saved.size)) state.size = saved.size;
-  } catch (err) { /* 初期の黒・ふつうのまま */ }
+function translucent(hex, a) {
+  const v = parseInt(hex.slice(1), 16);
+  return `rgba(${v >> 16}, ${(v >> 8) & 255}, ${v & 255}, ${a})`;
 }
 
-function savePen() {
-  try { localStorage.setItem('pen', JSON.stringify({ color: state.color, size: state.size })); } catch (err) { /* 覚えられなくても書ける */ }
+function loadToolOpts() {
+  for (const [tool, o] of Object.entries(TOOL_OPTS)) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(tool) || 'null');
+      if (saved && o.colors.some(([c]) => c === saved.color)) state[tool].color = saved.color;
+      if (saved && o.sizes.some(([w]) => w === saved.size)) state[tool].size = saved.size;
+    } catch (err) { /* 初期の色・太さのまま */ }
+  }
+}
+
+function saveToolOpts(tool) {
+  try { localStorage.setItem(tool, JSON.stringify(state[tool])); } catch (err) { /* 覚えられなくても書ける */ }
 }
 
 function renderPenMenu() {
-  $('penColor').style.background = state.color;
-  $('swatches').innerHTML = PEN_COLORS.map(([c, name]) =>
-    `<button class="swatch${c === state.color ? ' on' : ''}" data-color="${c}" style="background:${c}" aria-label="${name}"></button>`).join('');
-  $('sizes').innerHTML = PEN_SIZES.map(([w, name]) =>
-    `<button class="size${w === state.size ? ' on' : ''}" data-size="${w}">` +
-    `<span class="line" style="height:${Math.max(1.5, w * 1.2)}px;background:${state.color}"></span>${name}</button>`).join('');
+  $('penColor').style.background = state.pen.color;
+  $('markerColor').style.background = translucent(state.marker.color, TOOL_OPTS.marker.alpha);
+  const o = TOOL_OPTS[menuTool];
+  const cur = state[menuTool];
+  $('penMenuTitle').textContent = o.title;
+  $('swatches').innerHTML = o.colors.map(([c, name]) =>
+    `<button class="swatch${c === cur.color ? ' on' : ''}" data-color="${c}" ` +
+    `style="background:${translucent(c, o.alpha)}" aria-label="${name}"></button>`).join('');
+  $('sizes').style.gridTemplateColumns = `repeat(${o.sizes.length}, 1fr)`;
+  $('sizes').innerHTML = o.sizes.map(([w, name]) =>
+    `<button class="size${w === cur.size ? ' on' : ''}" data-size="${w}">` +
+    `<span class="line" style="height:${o.preview(w)}px;background:${translucent(cur.color, o.alpha)}"></span>${name}</button>`).join('');
 }
 
 $('penMenu').addEventListener('click', (e) => {
   const b = e.target.closest('button');
   if (!b) return;
-  if (b.dataset.color) state.color = b.dataset.color;
-  if (b.dataset.size) state.size = Number(b.dataset.size);
-  savePen();
+  if (b.dataset.color) state[menuTool].color = b.dataset.color;
+  if (b.dataset.size) state[menuTool].size = Number(b.dataset.size);
+  saveToolOpts(menuTool);
   renderPenMenu();
 });
 
-loadPen();
+loadToolOpts();
 renderPenMenu();
 
 // ---------------------------------------------------------------- バックアップと復元

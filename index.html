@@ -28,6 +28,10 @@
     <svg viewBox="0 0 24 24"><path d="M4 20l1.2-4.6L15.8 4.8a2 2 0 0 1 2.8 0l.6.6a2 2 0 0 1 0 2.8L8.6 18.8z"/><path d="M14 6.6l3.4 3.4"/></svg>
     <span class="pen-color" id="penColor"></span>
   </button>
+  <button class="tool" data-tool="marker" aria-label="マーカー（もう一度押すと色と太さ）">
+    <svg viewBox="0 0 24 24"><path d="M14.5 4.5l5 5-8 8-5-5z"/><path d="M6.5 12.5l-1.5 5.5 1 1 5.5-1.5"/><path d="M4 21h5"/></svg>
+    <span class="pen-color" id="markerColor"></span>
+  </button>
   <button class="tool" data-tool="eraser" aria-label="消しゴム">
     <svg viewBox="0 0 24 24"><path d="M8.5 19.5l-4-4a2 2 0 0 1 0-2.8l8.2-8.2a2 2 0 0 1 2.8 0l4 4a2 2 0 0 1 0 2.8l-7.2 7.2"/><path d="M8.5 19.5H20"/><path d="M9 9l6 6"/></svg>
   </button>
@@ -51,7 +55,7 @@
 </footer>
 
 <div id="penMenu" class="popup" hidden>
-  <div class="menu-title">ペン</div>
+  <div class="menu-title" id="penMenuTitle">ペン</div>
   <div class="swatches" id="swatches"></div>
   <div class="sizes" id="sizes"></div>
 </div>
