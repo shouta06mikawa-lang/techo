@@ -1,7 +1,7 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.6.1';
+const APP_VERSION = '0.7.0';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
@@ -109,6 +109,7 @@ const store = (() => {
 })();
 
 const weeks = new Map();   // 週キー → 線の配列（読み込み済みの週）
+const inkWeeks = new Set(); // 何か書いてある週のキー（カレンダーの点に使う）
 const dirty = new Set();
 let saveTimer = null;
 
@@ -125,7 +126,10 @@ async function flush() {
   dirty.clear();
   for (const key of keys) {
     try {
-      await store.put(key, { strokes: weeks.get(key) || [], updated: Date.now() });
+      const strokes = weeks.get(key) || [];
+      await store.put(key, { strokes, updated: Date.now() });
+      if (strokes.length) inkWeeks.add(key);
+      else inkWeeks.delete(key);
     } catch (err) {
       dirty.add(key);
       toast('保存に失敗しました');
@@ -182,6 +186,13 @@ async function showWeek() {
   state.strokes = strokes;
   redrawAll();
   updateUndoButtons();
+  updateThisWeekButton();
+}
+
+// 月曜日 monday の週へ移動する（カレンダー・今週ボタン用）
+function goToWeek(monday) {
+  const delta = Math.round((monday - state.weekStart) / (7 * 864e5));
+  if (delta) goWeek(delta);
 }
 
 function goWeek(delta) {
@@ -843,6 +854,68 @@ document.addEventListener('pointerdown', (e) => {
   if (!e.target.closest('.popup, #toolbar')) closePopups();
 });
 
+// ---------------------------------------------------------------- カレンダーと「今週」
+
+let calMonth = null;   // カレンダーに出している月の1日
+
+function keyToDate(key) {
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(y, m - 1, d);
+}
+
+function renderCalendar() {
+  const y = calMonth.getFullYear();
+  const m = calMonth.getMonth();
+  $('calTitle').textContent = `${y}年${m + 1}月`;
+  const todayKey = dateKey(new Date());
+  const shownKey = currentKey();
+  let html = '<div class="cal-head">' + WEEKDAYS_JA.map((w, i) =>
+    `<span class="${i === 5 ? 'sat' : i === 6 ? 'sun' : ''}">${w}</span>`).join('') + '</div>';
+  const last = new Date(y, m + 1, 0);
+  for (let mon = mondayOf(calMonth); mon <= last; mon = addDays(mon, 7)) {
+    const key = dateKey(mon);
+    html += `<div class="cal-week${key === shownKey ? ' shown' : ''}${inkWeeks.has(key) ? ' ink' : ''}" data-monday="${key}">`;
+    for (let i = 0; i < 7; i++) {
+      const d = addDays(mon, i);
+      const cls = [d.getMonth() !== m ? 'out' : '', i === 5 ? 'sat' : '', i === 6 ? 'sun' : '',
+        dateKey(d) === todayKey ? 'today' : ''].join(' ');
+      html += `<span class="${cls}">${d.getDate()}</span>`;
+    }
+    html += '</div>';
+  }
+  $('calGrid').innerHTML = html;
+}
+
+$('calBtn').addEventListener('click', () => {
+  const ws = state.weekStart;
+  calMonth = new Date(ws.getFullYear(), ws.getMonth(), 1);
+  renderCalendar();
+  togglePopup($('calMenu'));
+});
+$('calPrev').addEventListener('click', () => {
+  calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1);
+  renderCalendar();
+});
+$('calNext').addEventListener('click', () => {
+  calMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1);
+  renderCalendar();
+});
+$('calGrid').addEventListener('click', (e) => {
+  const row = e.target.closest('.cal-week');
+  if (!row) return;
+  closePopups();
+  goToWeek(keyToDate(row.dataset.monday));
+});
+
+$('thisWeekBtn').addEventListener('click', () => {
+  closePopups();
+  goToWeek(mondayOf(new Date()));
+});
+
+function updateThisWeekButton() {
+  $('thisWeekBtn').disabled = currentKey() === dateKey(mondayOf(new Date()));
+}
+
 // ---------------------------------------------------------------- ペンの色と太さ
 
 const PEN_COLORS = [
@@ -982,6 +1055,8 @@ $('restoreFile').addEventListener('change', async (e) => {
     await store.replaceAllWeeks(data.weeks);
     weeks.clear();
     histories.clear();
+    inkWeeks.clear();
+    for (const [key, v] of Object.entries(data.weeks)) if (v && v.strokes && v.strokes.length) inkWeeks.add(key);
     menu.hidden = true;
     await showWeek();
     toast(`${count}週分を戻しました`);
@@ -1006,7 +1081,8 @@ window.addEventListener('resize', layout);
 layout();
 showWeek();
 store.getAllWeeks().then((all) => {
-  hasInk = Object.values(all).some((v) => v.strokes && v.strokes.length);
+  for (const [key, v] of Object.entries(all)) if (v.strokes && v.strokes.length) inkWeeks.add(key);
+  hasInk = inkWeeks.size > 0;
   updateBackupInfo();
 }).catch(() => {});
 
@@ -1016,6 +1092,7 @@ setInterval(() => {
   const todayIdx = Math.round((new Date(new Date().toDateString()) - state.weekStart) / 864e5);
   const shown = el ? [...template.querySelectorAll('.day')].indexOf(el) : -1;
   if (shown !== todayIdx && (shown >= 0 || (todayIdx >= 0 && todayIdx < 7))) renderTemplate();
+  updateThisWeekButton();
 }, 60000);
 
 // 保存領域を「消されにくい」扱いにしてもらう

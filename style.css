@@ -288,3 +288,76 @@ button {
   width: 34px;
   border-radius: 99px;
 }
+
+/* 「今週」ボタン（文字） */
+.tool.text {
+  font-size: 15px;
+  font-weight: 600;
+  color: #3a3a3a;
+}
+
+/* カレンダー */
+#calMenu { width: 330px; }
+.cal-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 8px;
+}
+#calMenu .cal-top button {
+  width: 44px;
+  height: 40px;
+  margin: 0;
+  padding: 0;
+  background: none;
+  font-size: 26px;
+  text-align: center;
+  color: var(--muted);
+}
+.cal-head,
+.cal-week {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+}
+.cal-head {
+  font-size: 11px;
+  color: var(--muted);
+  padding-bottom: 4px;
+}
+.cal-week {
+  position: relative;
+  border-radius: 8px;
+  cursor: pointer;
+}
+.cal-week.shown { background: #eef2f7; }
+.cal-week.ink::before {
+  content: '';
+  position: absolute;
+  left: -7px;
+  top: 50%;
+  width: 5px;
+  height: 5px;
+  margin-top: -2.5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.cal-week span {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 40px;
+  font-size: 15px;
+}
+.cal-week .out { color: #c4c4c4; }
+.cal-head .sat, .cal-week .sat:not(.out) { color: var(--sat); }
+.cal-head .sun, .cal-week .sun:not(.out) { color: var(--sun); }
+.cal-week .today::after {
+  content: '';
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border: 2px solid var(--sun);
+  border-radius: 50%;
+}
+.cal-week span { position: relative; }

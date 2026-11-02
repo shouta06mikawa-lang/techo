@@ -39,6 +39,11 @@
     <svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9.5a5.5 5.5 0 0 0 0 11H13"/></svg>
   </button>
   <span class="sep"></span>
+  <button class="tool" id="calBtn" aria-label="カレンダー">
+    <svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="2"/><path d="M3.5 9.5h17"/><path d="M8 3v4"/><path d="M16 3v4"/><path d="M7.5 13h1M11.5 13h1M15.5 13h1M7.5 16.5h1M11.5 16.5h1"/></svg>
+  </button>
+  <button class="tool text" id="thisWeekBtn" aria-label="今週に戻る">今週</button>
+  <span class="sep"></span>
   <button class="tool" id="backupBtn" aria-label="バックアップ">
     <svg viewBox="0 0 24 24"><path d="M12 3v12"/><path d="M7.5 7.5L12 3l4.5 4.5"/><path d="M6 11H5a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-8a1 1 0 0 0-1-1h-1"/></svg>
     <span class="badge" id="backupBadge" hidden></span>
@@ -49,6 +54,15 @@
   <div class="menu-title">ペン</div>
   <div class="swatches" id="swatches"></div>
   <div class="sizes" id="sizes"></div>
+</div>
+
+<div id="calMenu" class="popup" hidden>
+  <div class="cal-top">
+    <button id="calPrev" aria-label="前の月">‹</button>
+    <div class="menu-title" id="calTitle"></div>
+    <button id="calNext" aria-label="次の月">›</button>
+  </div>
+  <div id="calGrid"></div>
 </div>
 
 <div id="backupMenu" class="popup" hidden>
