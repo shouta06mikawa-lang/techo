@@ -1,7 +1,7 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.6.0';
+const APP_VERSION = '0.6.1';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
@@ -1021,7 +1021,37 @@ setInterval(() => {
 // 保存領域を「消されにくい」扱いにしてもらう
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
-// オフライン対応
+// オフライン対応と、新しい版への自動切り替え
+// iPad のホーム画面アプリは閉じても裏で動き続けるので、画面に戻ってくるたびに新しい版がないか確かめる。
+// 新しい版が入ったら、書いている途中でなければ保存してから読み込み直す。
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  const hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.register('sw.js').then((reg) => {
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') reg.update().catch(() => {});
+    });
+  }).catch(() => {});
+
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController || reloading) return;   // 初めて入ったときは読み込み直さない
+    reloading = true;
+    const go = async () => {
+      if (current || erasing) {
+        setTimeout(go, 500);
+        return;
+      }
+      await flush();
+      try { sessionStorage.setItem('updated', '1'); } catch (err) { /* お知らせが出ないだけ */ }
+      location.reload();
+    };
+    go();
+  });
+
+  try {
+    if (sessionStorage.getItem('updated')) {
+      sessionStorage.removeItem('updated');
+      toast(`新しい版（v${APP_VERSION}）になりました`);
+    }
+  } catch (err) { /* お知らせが出ないだけ */ }
 }
