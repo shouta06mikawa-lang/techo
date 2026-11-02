@@ -1,7 +1,7 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.7.0';
+const APP_VERSION = '0.8.0';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
@@ -143,6 +143,60 @@ document.addEventListener('visibilitychange', () => {
 });
 window.addEventListener('pagehide', flush);
 
+// ---------------------------------------------------------------- 日本の祝日
+// 祝日法のきまりから計算する（ネット不要）。春分・秋分の式は 2099年まで有効。
+// 法律が変わって祝日が増えたり動いたりしたら、ここを直す。
+
+const holidayCache = new Map();   // 年 → Map(日付キー → 祝日の名前)
+
+function holidaysOf(y) {
+  if (holidayCache.has(y)) return holidayCache.get(y);
+  const h = new Map();
+  const add = (m, d, name) => h.set(dateKey(new Date(y, m - 1, d)), name);
+  const nthMonday = (m, n) => 1 + ((8 - new Date(y, m - 1, 1).getDay()) % 7) + (n - 1) * 7;
+  const k = y - 1980;
+
+  add(1, 1, '元日');
+  add(1, nthMonday(1, 2), '成人の日');
+  add(2, 11, '建国記念の日');
+  add(2, 23, '天皇誕生日');
+  add(3, Math.floor(20.8431 + 0.242194 * k - Math.floor(k / 4)), '春分の日');
+  add(4, 29, '昭和の日');
+  add(5, 3, '憲法記念日');
+  add(5, 4, 'みどりの日');
+  add(5, 5, 'こどもの日');
+  add(7, nthMonday(7, 3), '海の日');
+  add(8, 11, '山の日');
+  add(9, nthMonday(9, 3), '敬老の日');
+  add(9, Math.floor(23.2488 + 0.242194 * k - Math.floor(k / 4)), '秋分の日');
+  add(10, nthMonday(10, 2), 'スポーツの日');
+  add(11, 3, '文化の日');
+  add(11, 23, '勤労感謝の日');
+
+  const base = [...h.keys()];
+  // 国民の休日：祝日と祝日にはさまれた日（日曜をのぞく）
+  for (const key of base) {
+    const next = addDays(keyToDate(key), 1);
+    if (!h.has(dateKey(next)) && h.has(dateKey(addDays(next, 1))) && next.getDay() !== 0) {
+      h.set(dateKey(next), '国民の休日');
+    }
+  }
+  // 振替休日：祝日が日曜なら、そのあと最初の祝日でない日
+  for (const key of base) {
+    const d = keyToDate(key);
+    if (d.getDay() !== 0) continue;
+    let n = addDays(d, 1);
+    while (h.has(dateKey(n))) n = addDays(n, 1);
+    h.set(dateKey(n), '振替休日');
+  }
+  holidayCache.set(y, h);
+  return h;
+}
+
+function holidayName(d) {
+  return holidaysOf(d.getFullYear()).get(dateKey(d)) || '';
+}
+
 // ---------------------------------------------------------------- 週の表示
 
 function renderTemplate() {
@@ -153,10 +207,12 @@ function renderTemplate() {
     `<span class="en"><span>${MONTHS_EN[ws.getMonth()]}</span><span>${ws.getFullYear()}</span></span></div>`;
   for (let i = 0; i < 7; i++) {
     const d = addDays(ws, i);
-    const cls = ['day', i === 5 ? 'sat' : '', i === 6 ? 'sun' : '',
+    const hol = holidayName(d);
+    const cls = ['day', i === 5 ? 'sat' : '', i === 6 ? 'sun' : '', hol ? 'hol' : '',
       dateKey(d) === todayKey ? 'today' : ''].join(' ');
     const num = d.getDate() === 1 ? `${d.getMonth() + 1}/1` : d.getDate();
-    html += `<div class="${cls}"><span class="num">${num}</span><span class="wd">${WEEKDAYS_JA[i]}</span></div>`;
+    html += `<div class="${cls}"><span class="num">${num}</span><span class="wd">${WEEKDAYS_JA[i]}</span>` +
+      (hol ? `<span class="hname">${hol}</span>` : '') + '</div>';
   }
   html += '</div>';
   template.innerHTML = html;
@@ -877,9 +933,10 @@ function renderCalendar() {
     html += `<div class="cal-week${key === shownKey ? ' shown' : ''}${inkWeeks.has(key) ? ' ink' : ''}" data-monday="${key}">`;
     for (let i = 0; i < 7; i++) {
       const d = addDays(mon, i);
+      const hol = holidayName(d);
       const cls = [d.getMonth() !== m ? 'out' : '', i === 5 ? 'sat' : '', i === 6 ? 'sun' : '',
-        dateKey(d) === todayKey ? 'today' : ''].join(' ');
-      html += `<span class="${cls}">${d.getDate()}</span>`;
+        hol ? 'hol' : '', dateKey(d) === todayKey ? 'today' : ''].join(' ');
+      html += `<span class="${cls}"${hol ? ` title="${hol}"` : ''}>${d.getDate()}</span>`;
     }
     html += '</div>';
   }

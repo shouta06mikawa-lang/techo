@@ -124,6 +124,13 @@ button {
 }
 .sat .num, .sat .wd { color: var(--sat); }
 .sun .num, .sun .wd { color: var(--sun); }
+.hol .num, .hol .wd { color: var(--sun); }
+.hname {
+  margin-top: 0.4cqh;
+  font-size: 1.05cqw;
+  color: var(--sun);
+  white-space: nowrap;
+}
 
 #version {
   position: absolute;
@@ -352,6 +359,7 @@ button {
 .cal-week .out { color: #c4c4c4; }
 .cal-head .sat, .cal-week .sat:not(.out) { color: var(--sat); }
 .cal-head .sun, .cal-week .sun:not(.out) { color: var(--sun); }
+.cal-week .hol:not(.out) { color: var(--sun); }
 .cal-week .today::after {
   content: '';
   position: absolute;
