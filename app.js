@@ -1,7 +1,7 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.9.0';
+const APP_VERSION = '0.9.1';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
@@ -1127,7 +1127,9 @@ async function makeBackupFile() {
   await flush();
   const all = await store.getAllWeeks();
   const data = { app: 'techo', format: 1, exportedAt: new Date().toISOString(), weeks: all };
-  const name = `techo-backup-${dateKey(new Date())}.json`;
+  // 名前を固定にして、同じ場所に保存するたび上書きできるようにする（古いバックアップがたまらない）。
+  // いつのバックアップかは中の exportedAt に入っていて、戻すときの確認に出る。
+  const name = 'techo-backup.json';
   return { file: new File([JSON.stringify(data)], name, { type: 'application/json' }), count: Object.keys(all).length };
 }
 
