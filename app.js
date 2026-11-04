@@ -1,7 +1,7 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.9.2';
+const APP_VERSION = '0.9.3';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
@@ -352,8 +352,9 @@ function clearCtx(ctx) {
 // 点と点の間は、前後の点も使った滑らかな3次曲線（Catmull-Rom）で、必ず点の上を通るように描く。
 // ペンの点がまばらでも（速く書いても）カクカクしない。
 
+// 筆圧で太さを変える幅（v0.9.3 で狭くした：強く押した所がこぶのようにふくらまないように）
 function widthAt(s, p) {
-  return s.size * (0.35 + 1.3 * p);
+  return s.size * (0.5 + 1.0 * p);
 }
 
 // 点 i-1 から点 i までの曲線の制御点。区間の長さが0なら null。
@@ -502,9 +503,12 @@ stage.addEventListener('pointerdown', (e) => {
     eraseAlong(x, y, x, y);
     drawEraserCursor(x, y);
   } else {
-    const p = pressureOf(e, null);
+    const p = pressureOf(e, null, 0);
     current = {
       id: e.pointerId,
+      sx: x, sy: y,          // ならした位置
+      raw: [x, y],           // ペンの今の本当の位置
+      t: e.timeStamp,
       stroke: state.tool === 'marker'
         ? { tool: 'marker', color: state.marker.color, size: state.marker.size, pts: [round1(x), round1(y), p] }
         : { color: state.pen.color, size: state.pen.size, pts: [round1(x), round1(y), p] },
@@ -539,6 +543,7 @@ const finishPointer = (e) => {
     touchUp(e);
     return;
   }
+  if (current && e.pointerId === current.id && e.type === 'pointerup') current.raw = toPage(e);   // 離した場所
   if ((current && e.pointerId === current.id) || (erasing && e.pointerId === erasing.id)) endStroke();
 };
 stage.addEventListener('pointerup', finishPointer);
@@ -548,24 +553,36 @@ function round1(v) {
   return Math.round(v * 10) / 10;
 }
 
-function pressureOf(e, prev) {
-  // マウスは筆圧が無いので中間の値。ペンは少しなめらかにして震えを抑える。
+// ---- 手ぶれ補正
+// Apple Pencil は1秒に約240回、ほんの少しずつずれた位置を送ってくる。そのまま全部の点を通すと
+// 線が細かくガタガタするので、位置と筆圧を時間でならし、近すぎる点は捨ててから曲線にする。
+const POS_TAU = 10;       // 位置をならす強さ（ミリ秒。大きいほどなめらか・遅れる）
+const PRESS_TAU = 30;     // 筆圧をならす強さ（ミリ秒）
+const MIN_STEP_PX = 2;    // これより近い点は使わない（画面のピクセル）
+
+const smoothing = (dt, tau) => 1 - Math.exp(-dt / tau);
+
+function pressureOf(e, prev, dt) {
+  // マウスは筆圧が無いので中間の値
   let p = e.pointerType === 'pen' && e.pressure > 0 ? e.pressure : 0.5;
   p = Math.min(1, Math.max(0.05, p));
-  if (prev != null) p = prev * 0.6 + p * 0.4;
+  if (prev != null) p = prev + (p - prev) * smoothing(dt, PRESS_TAU);
   return Math.round(p * 100) / 100;
 }
 
 function addPoint(e) {
   const s = current.stroke;
   const [x, y] = toPage(e);
+  const dt = Math.max(0.5, Math.min(50, e.timeStamp - current.t));
+  current.t = e.timeStamp;
+  current.raw = [x, y];
+  const a = smoothing(dt, POS_TAU);
+  current.sx += (x - current.sx) * a;
+  current.sy += (y - current.sy) * a;
+  current.lastP = pressureOf(e, current.lastP, dt);
   const n = s.pts.length / 3;
-  const dx = x - s.pts[n * 3 - 3];
-  const dy = y - s.pts[n * 3 - 2];
-  if (dx * dx + dy * dy < 0.09) return;   // 近すぎる点は省く
-  const p = pressureOf(e, current.lastP);
-  current.lastP = p;
-  s.pts.push(round1(x), round1(y), p);
+  if (Math.hypot(current.sx - s.pts[n * 3 - 3], current.sy - s.pts[n * 3 - 2]) * view.k < MIN_STEP_PX) return;
+  s.pts.push(round1(current.sx), round1(current.sy), current.lastP);
   // 1つ前の区間は、次の点が来て形が決まったので本番のキャンバスに描く（マーカーは書き終わりにまとめて）
   if (n >= 2 && !isMarker(s)) {
     ink.strokeStyle = s.color;
@@ -588,18 +605,16 @@ function drawLive(e) {
   live.fillStyle = s.color;
   if (n === 1) drawDot(live, s);
   else drawSeg(live, s, n - 1);
-  let predicted = [];
+  // 最後の点からペン先（と予測した先）まではまっすぐつないで、線がペンから遅れて見えないようにする
+  let ahead = [current.raw];
   if (e.getPredictedEvents) {
-    try { predicted = e.getPredictedEvents().map(toPage); } catch (err) { predicted = []; }
+    try { ahead = ahead.concat(e.getPredictedEvents().map(toPage)); } catch (err) { /* 予測なしでよい */ }
   }
-  if (predicted.length) {
-    live.lineWidth = widthAt(s, s.pts[n * 3 - 1]);
-    live.beginPath();
-    live.moveTo(s.pts[n * 3 - 3], s.pts[n * 3 - 2]);
-    for (const [x, y] of predicted) live.lineTo(x, y);
-    live.stroke();
-  }
-  liveDirty = true;
+  live.lineWidth = widthAt(s, current.lastP);
+  live.beginPath();
+  live.moveTo(s.pts[n * 3 - 3], s.pts[n * 3 - 2]);
+  for (const [x, y] of ahead) live.lineTo(x, y);
+  live.stroke();
 }
 
 function drawEraserCursor(x, y) {
@@ -615,6 +630,12 @@ function drawEraserCursor(x, y) {
 function endStroke() {
   if (current) {
     const s = current.stroke;
+    const before = s.pts.length / 3;
+    // ならした位置は少し遅れているので、ペンを離した本当の位置で線を終える
+    const [rx, ry] = current.raw;
+    if (Math.hypot(rx - s.pts[before * 3 - 3], ry - s.pts[before * 3 - 2]) * view.k >= MIN_STEP_PX) {
+      s.pts.push(round1(rx), round1(ry), current.lastP);
+    }
     const n = s.pts.length / 3;
     state.strokes.push(s);
     if (isMarker(s)) {
@@ -623,7 +644,10 @@ function endStroke() {
       ink.strokeStyle = s.color;
       ink.fillStyle = s.color;
       if (n === 1) drawDot(ink, s);
-      else drawSeg(ink, s, n - 1);
+      else {
+        if (n > before && n >= 3) drawSeg(ink, s, n - 2);   // 最後の点が増えて形が決まった区間
+        drawSeg(ink, s, n - 1);
+      }
     }
     current = null;
     markDirty();
