@@ -1,7 +1,7 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.9.1';
+const APP_VERSION = '0.9.2';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
@@ -459,8 +459,13 @@ function redrawAll() {
 
 // ---------------------------------------------------------------- ペンの入力
 
+// ペンの位置 → ページの論理座標。
+// キャンバスが今画面に出ている大きさ（stageRect）と、描いたときの大きさ（stageW/H）の比も使うので、
+// iPad が知らせずに表示の大きさを変えても、線はペンの真下に出る。
 function toPage(e) {
-  return [(e.clientX - stageRect.left - view.x) / view.k, (e.clientY - stageRect.top - view.y) / view.k];
+  const sx = (e.clientX - stageRect.left) * (stageW / stageRect.width);
+  const sy = (e.clientY - stageRect.top) * (stageH / stageRect.height);
+  return [(sx - view.x) / view.k, (sy - view.y) / view.k];
 }
 
 let current = null;   // 書いている途中の線
@@ -482,7 +487,12 @@ stage.addEventListener('pointerdown', (e) => {
   cancelGesture();   // 先に置いていた手のひらでページが動いていたら元に戻す
   if (previewBase) commitView();
   for (const a of template.getAnimations()) a.finish();
-  stageRect = stage.getBoundingClientRect();
+  if (window.scrollX || window.scrollY) window.scrollTo(0, 0);   // 画面全体がずれていたら戻す
+  stageRect = inkCanvas.getBoundingClientRect();
+  if (Math.abs(stageRect.width - stageW) > 1 || Math.abs(stageRect.height - stageH) > 1) {
+    layout();   // 表示の大きさが変わっていたら、ここで合わせ直す
+    stageRect = inkCanvas.getBoundingClientRect();
+  }
   const [x, y] = toPage(e);
   if (x < 0 || y < 0 || x > PAGE_W || y > PAGE_H) return;   // ページの外
   try { stage.setPointerCapture(e.pointerId); } catch (err) { /* 取れなくても描ける */ }
@@ -1218,7 +1228,30 @@ function toast(msg) {
 // ---------------------------------------------------------------- 起動
 
 $('version').textContent = 'v' + APP_VERSION;
-window.addEventListener('resize', layout);
+// 表示の大きさが変わったら合わせ直す。iPad（とくに iPadOS 26 のウインドウやメニューバー）は
+// window の resize を出さずに表示の大きさを変えることがあるので、ページの入れ物そのものを見張る。
+let layoutQueued = false;
+function relayoutSoon() {
+  if (layoutQueued) return;
+  layoutQueued = true;
+  requestAnimationFrame(() => {
+    layoutQueued = false;
+    if (window.scrollX || window.scrollY) window.scrollTo(0, 0);
+    const r = stage.getBoundingClientRect();
+    if (Math.abs(r.width - stageW) > 0.5 || Math.abs(r.height - stageH) > 0.5) {
+      if (current || erasing) relayoutSoon();   // 書いている途中は、書き終わってから
+      else layout();
+    }
+  });
+}
+window.addEventListener('resize', relayoutSoon);
+window.addEventListener('scroll', relayoutSoon);
+window.addEventListener('pageshow', relayoutSoon);
+if (window.visualViewport) window.visualViewport.addEventListener('resize', relayoutSoon);
+if (window.ResizeObserver) new ResizeObserver(relayoutSoon).observe(stage);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') relayoutSoon();
+});
 layout();
 showWeek();
 store.getAllWeeks().then((all) => {
