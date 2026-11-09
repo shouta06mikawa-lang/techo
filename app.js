@@ -1,7 +1,7 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.10.1';
+const APP_VERSION = '0.10.2';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
@@ -201,7 +201,7 @@ function holidayName(d) {
 // iPad の「ショートカット」がカレンダーの予定を「開始|終了|タイトル」の行にしてコピーし、
 // それをここで読み取る。予定は localStorage `events` に { days: {日付キー: [{t, title}]}, imported } で持つ。
 
-const EVENTS_MAX_PER_DAY = 3;
+const EVENT_LINES = 2;   // 曜日の下に出せる行数（祝日名があるとその分へる）
 let events = { days: {}, imported: 0 };
 try {
   const saved = JSON.parse(localStorage.getItem('events') || 'null');
@@ -213,13 +213,16 @@ function escapeHtml(t) {
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
-function eventsHtml(key) {
+function eventsHtml(key, used) {
   const list = events.days[key];
   if (!list || !list.length) return '';
-  const shown = list.slice(0, EVENTS_MAX_PER_DAY).map((ev) =>
-    `<span class="ev">${ev.t ? `<b>${ev.t}</b>` : ''}${escapeHtml(ev.title)}</span>`).join('');
-  const more = list.length > EVENTS_MAX_PER_DAY ? `<span class="ev more">ほか${list.length - EVENTS_MAX_PER_DAY}件</span>` : '';
-  return `<span class="evs">${shown}${more}</span>`;
+  const cap = Math.max(1, EVENT_LINES - used);
+  const shown = list.slice(0, cap);
+  const rest = list.length - shown.length;
+  // 入りきらない分は最後の行のうしろに「ほか◯件」と付ける（行を増やさない）
+  return '<span class="evs">' + shown.map((ev, i) =>
+    `<span class="ev"><span class="evt">${ev.t ? `<b>${ev.t}</b>` : ''}${escapeHtml(ev.title)}</span>` +
+    (rest && i === shown.length - 1 ? `<span class="more">ほか${rest}件</span>` : '') + '</span>').join('') + '</span>';
 }
 
 // 「2026-11-09T10:00:00+09:00」「2026/11/09 10:00」「2026年11月9日 午後3:00」などを読む（時差は見ず、書いてある時刻のまま）
@@ -313,7 +316,7 @@ function renderTemplate() {
       dateKey(d) === todayKey ? 'today' : ''].join(' ');
     const num = d.getDate() === 1 ? `${d.getMonth() + 1}/1` : d.getDate();
     html += `<div class="${cls}"><span class="num">${num}</span><span class="wd">${WEEKDAYS_JA[i]}</span>` +
-      (hol ? `<span class="hname">${hol}</span>` : '') + eventsHtml(dateKey(d)) + '</div>';
+      (hol ? `<span class="hname">${hol}</span>` : '') + eventsHtml(dateKey(d), hol ? 1 : 0) + '</div>';
   }
   html += '</div>';
   template.innerHTML = html;

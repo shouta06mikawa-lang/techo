@@ -103,7 +103,8 @@ button {
 .day {
   display: flex;
   flex-direction: column;
-  justify-content: center;
+  justify-content: flex-start;   /* 予定が増えても日付の位置が動かないよう上から並べる */
+  padding-top: 1.5cqh;
   padding-left: 1.2cqw;
   border-bottom: 1px solid var(--line);
 }
@@ -126,7 +127,8 @@ button {
 .sun .num, .sun .wd { color: var(--sun); }
 .hol .num, .hol .wd { color: var(--sun); }
 .hname {
-  margin-top: 0.4cqh;
+  margin-top: 0.2cqh;
+  line-height: 1.25;
   font-size: 1.05cqw;
   color: var(--sun);
   white-space: nowrap;
@@ -370,28 +372,31 @@ button {
 }
 .cal-week span { position: relative; }
 
-/* 取り込んだカレンダーの予定（日付の行の右上） */
-.day { position: relative; }
+/* 取り込んだカレンダーの予定（曜日の下） */
+.day { position: relative; overflow: hidden; }
 .evs {
-  position: absolute;
-  top: 0.9cqh;
-  right: 1cqw;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
-  max-width: 62%;
-  font-size: 1.05cqw;
-  line-height: 1.35;
+  align-items: flex-start;
+  max-width: 46%;
+  margin-top: 0.2cqh;
+  padding-left: 1cqw;
+  font-size: 0.95cqw;
+  line-height: 1.25;
   color: #4d6a8c;
 }
 .ev {
+  display: flex;
   max-width: 100%;
-  overflow: hidden;
   white-space: nowrap;
+}
+.evt {
+  min-width: 0;
+  overflow: hidden;
   text-overflow: ellipsis;
 }
 .ev b { font-weight: 500; margin-right: 0.5em; }
-.ev.more { color: var(--muted); }
+.ev .more { flex: none; margin-left: 0.6em; color: var(--muted); }
 .cal-events {
   margin-top: 10px;
   padding-top: 8px;
