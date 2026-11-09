@@ -67,6 +67,18 @@
     <button id="calNext" aria-label="次の月">›</button>
   </div>
   <div id="calGrid"></div>
+  <div class="cal-events">
+    <div class="menu-note" id="eventsNote"></div>
+    <button id="importEvents">予定を取り込む</button>
+    <button id="clearEvents" class="small">取り込んだ予定を消す</button>
+  </div>
+</div>
+
+<div id="pasteMenu" class="popup" hidden>
+  <div class="menu-title">予定を貼り付け</div>
+  <div class="menu-note">下の欄を長押しして「ペースト」を押し、「取り込む」を押してください。</div>
+  <textarea id="pasteBox" rows="5"></textarea>
+  <button id="pasteOk">取り込む</button>
 </div>
 
 <div id="backupMenu" class="popup" hidden>

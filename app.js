@@ -1,7 +1,7 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.9.3';
+const APP_VERSION = '0.10.0';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
@@ -197,6 +197,98 @@ function holidayName(d) {
   return holidaysOf(d.getFullYear()).get(dateKey(d)) || '';
 }
 
+// ---------------------------------------------------------------- カレンダーの予定（取り込み）
+// iPad の「ショートカット」がカレンダーの予定を「開始|終了|タイトル」の行にしてコピーし、
+// それをここで読み取る。予定は localStorage `events` に { days: {日付キー: [{t, title}]}, imported } で持つ。
+
+const EVENTS_MAX_PER_DAY = 3;
+let events = { days: {}, imported: 0 };
+try {
+  const saved = JSON.parse(localStorage.getItem('events') || 'null');
+  if (saved && saved.days) events = saved;
+} catch (err) { /* 読めなければ予定なしで始める */ }
+
+function escapeHtml(t) {
+  return String(t).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
+}
+
+function eventsHtml(key) {
+  const list = events.days[key];
+  if (!list || !list.length) return '';
+  const shown = list.slice(0, EVENTS_MAX_PER_DAY).map((ev) =>
+    `<span class="ev">${ev.t ? `<b>${ev.t}</b>` : ''}${escapeHtml(ev.title)}</span>`).join('');
+  const more = list.length > EVENTS_MAX_PER_DAY ? `<span class="ev more">ほか${list.length - EVENTS_MAX_PER_DAY}件</span>` : '';
+  return `<span class="evs">${shown}${more}</span>`;
+}
+
+// 「2026-11-09T10:00:00+09:00」「2026/11/09 10:00」「2026年11月9日 午後3:00」などを読む（時差は見ず、書いてある時刻のまま）
+function parseEventDate(text) {
+  const m = /(\d{4})\s*[-\/年.]\s*(\d{1,2})\s*[-\/月.]\s*(\d{1,2})\s*日?(?:[^\d午]*?(午前|午後|AM|PM)?\s*(\d{1,2})\s*[:時]\s*(\d{2}))?/i.exec(text);
+  if (!m) return null;
+  let h = m[5] == null ? null : Number(m[5]);
+  if (h != null && /午後|PM/i.test(m[4] || '') && h < 12) h += 12;
+  if (h != null && /午前|AM/i.test(m[4] || '') && h === 12) h = 0;
+  return { day: new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3])), h, min: h == null ? null : Number(m[6]) };
+}
+
+function parseEvents(text) {
+  const out = [];
+  for (const line of String(text).split(/\r?\n/)) {
+    const parts = line.split(/[|｜\t]/);
+    if (parts.length < 3) continue;
+    const st = parseEventDate(parts[0]);
+    const en = parseEventDate(parts[1]) || st;
+    const title = parts.slice(2).join('|').trim() || '（予定）';
+    if (!st) continue;
+    const midnight = (x) => x.h === 0 && x.min === 0;
+    const allDay = st.h == null || (midnight(st) && (en.h == null || midnight(en) || (en.h === 23 && en.min === 59)));
+    let last = en.day < st.day ? st.day : en.day;
+    // 終わりが「次の日の 0:00」ならその日は含めない
+    if (last > st.day && en.h != null && midnight(en)) last = addDays(last, -1);
+    const t = allDay ? '' : `${st.h}:${String(st.min).padStart(2, '0')}`;
+    let d = st.day;
+    for (let n = 0; d <= last && n < 62; n++, d = addDays(d, 1)) {
+      out.push({ key: dateKey(d), first: n === 0, t: n === 0 ? t : '', title, sort: allDay || n > 0 ? -1 : st.h * 60 + st.min });
+    }
+  }
+  return out;
+}
+
+// 取り込んだ予定の「最初の日〜最後の日」の分だけ入れ替える（それより前の予定は残す）
+function applyEvents(list) {
+  const keys = list.map((e) => e.key).sort();
+  const from = keys[0];
+  const to = keys[keys.length - 1];
+  for (const k of Object.keys(events.days)) if (k >= from && k <= to) delete events.days[k];
+  list.sort((a, b) => a.sort - b.sort);
+  for (const e of list) (events.days[e.key] = events.days[e.key] || []).push({ t: e.t, title: e.title });
+  events.imported = Date.now();
+  try { localStorage.setItem('events', JSON.stringify(events)); } catch (err) { /* 表示はできる */ }
+  renderTemplate();
+  updateEventsNote();
+}
+
+function importEventsText(text) {
+  const list = parseEvents(text);
+  if (!list.length) {
+    toast('予定が見つかりませんでした。先にショートカットを実行してください');
+    return false;
+  }
+  applyEvents(list);
+  const n = list.filter((e) => e.first).length;
+  toast(`予定を取り込みました（${n}件）`);
+  return true;
+}
+
+function updateEventsNote() {
+  const el = $('eventsNote');
+  if (!el) return;
+  if (!events.imported) { el.textContent = 'iPad のカレンダーの予定を表示できます'; return; }
+  const d = new Date(events.imported);
+  el.textContent = `予定の取り込み: ${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
+
 // ---------------------------------------------------------------- 週の表示
 
 function renderTemplate() {
@@ -212,7 +304,7 @@ function renderTemplate() {
       dateKey(d) === todayKey ? 'today' : ''].join(' ');
     const num = d.getDate() === 1 ? `${d.getMonth() + 1}/1` : d.getDate();
     html += `<div class="${cls}"><span class="num">${num}</span><span class="wd">${WEEKDAYS_JA[i]}</span>` +
-      (hol ? `<span class="hname">${hol}</span>` : '') + '</div>';
+      (hol ? `<span class="hname">${hol}</span>` : '') + eventsHtml(dateKey(d)) + '</div>';
   }
   html += '</div>';
   template.innerHTML = html;
@@ -899,6 +991,7 @@ document.addEventListener('contextmenu', (e) => e.preventDefault());
 // Mac で確認しやすいように：
 // 矢印キー・トラックパッドの横スクロールで週を移動、ピンチ（または control + スクロール）で拡大、拡大中はスクロールで移動
 document.addEventListener('keydown', (e) => {
+  if (e.target.closest && e.target.closest('textarea, input')) return;   // 貼り付け欄で文字を打っているとき
   if (e.key === 'ArrowLeft') goWeek(-1);
   if (e.key === 'ArrowRight') goWeek(1);
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
@@ -1048,6 +1141,30 @@ $('calGrid').addEventListener('click', (e) => {
   closePopups();
   goToWeek(keyToDate(row.dataset.monday));
 });
+
+$('importEvents').addEventListener('click', async () => {
+  let text = '';
+  try {
+    if (navigator.clipboard && navigator.clipboard.readText) text = await navigator.clipboard.readText();
+  } catch (err) { text = ''; }
+  if (text && importEventsText(text)) { closePopups(); return; }
+  if (text) return;   // 読めたが予定の形ではなかった（メッセージは出した）
+  // コピーした内容を読めなかったときは、貼り付ける欄を出す
+  $('pasteBox').value = '';
+  closePopups($('pasteMenu'));
+  $('pasteMenu').hidden = false;
+});
+$('pasteOk').addEventListener('click', () => {
+  if (importEventsText($('pasteBox').value)) closePopups();
+});
+$('clearEvents').addEventListener('click', () => {
+  if (!confirm('取り込んだ予定の表示をすべて消しますか？（iPad のカレンダーの予定は消えません）')) return;
+  events = { days: {}, imported: 0 };
+  try { localStorage.removeItem('events'); } catch (err) { /* なし */ }
+  renderTemplate();
+  updateEventsNote();
+});
+updateEventsNote();
 
 $('thisWeekBtn').addEventListener('click', () => {
   closePopups();
