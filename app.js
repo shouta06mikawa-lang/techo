@@ -1,7 +1,7 @@
 'use strict';
 
 // ページの中身は「論理座標」1000 x 690（横向き iPad の画面比）で記録する。画面の大きさが変わっても線がずれない。
-const APP_VERSION = '0.10.0';
+const APP_VERSION = '0.10.1';
 const PAGE_W = 1000;
 const PAGE_H = 690;
 const WEEKDAYS_JA = ['月', '火', '水', '木', '金', '土', '日'];
@@ -249,10 +249,19 @@ function parseEvents(text) {
     const t = allDay ? '' : `${st.h}:${String(st.min).padStart(2, '0')}`;
     let d = st.day;
     for (let n = 0; d <= last && n < 62; n++, d = addDays(d, 1)) {
+      // 手帳が自分で出している祝日と同じ名前の予定は出さない（祝日カレンダーとかぶるため）
+      if (allDay && holidayName(d) === title) continue;
       out.push({ key: dateKey(d), first: n === 0, t: n === 0 ? t : '', title, sort: allDay || n > 0 ? -1 : st.h * 60 + st.min });
     }
   }
-  return out;
+  // 同じ日・同じ時刻・同じ名前の予定は1つにまとめる（同じ予定が2つのカレンダーに入っているとき）
+  const seen = new Set();
+  return out.filter((e) => {
+    const id = e.key + '|' + e.t + '|' + e.title;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
+  });
 }
 
 // 取り込んだ予定の「最初の日〜最後の日」の分だけ入れ替える（それより前の予定は残す）
